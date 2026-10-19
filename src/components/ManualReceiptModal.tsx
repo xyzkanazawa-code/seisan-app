@@ -1,0 +1,367 @@
+import React, { useState, useEffect } from 'react';
+import { X, Plus, Calendar, DollarSign, MapPin, Tag, CreditCard } from 'lucide-react';
+import { db, type Tour, type ExpenseCategory, type PaymentMethod, type Receipt } from '../db';
+import { extractInvoiceNumbers } from '../utils/invoiceValidator';
+import { learnFromReceipt } from '../utils/learningService';
+
+interface ManualReceiptModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  activeTour: Tour;
+  onReceiptAdded: () => void;
+}
+
+export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
+  isOpen,
+  onClose,
+  activeTour,
+  onReceiptAdded
+}) => {
+  const [category, setCategory] = useState<ExpenseCategory>('parking');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('advance');
+  const [advanceRemaining, setAdvanceRemaining] = useState<number | null>(null);
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [amount, setAmount] = useState<number | ''>('');
+  const [place, setPlace] = useState('');
+  const [invoiceNumber, setInvoiceNumber] = useState('');
+  const [memo, setMemo] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  // モーダル表示時に前払金の残高を計算し、0以下なら自動的に個人立替に切り替え
+  useEffect(() => {
+    if (!isOpen || !activeTour?.id) return;
+    db.receipts
+      .where('tourId')
+      .equals(activeTour.id)
+      .toArray()
+      .then((existing) => {
+        const advanceSpent = existing
+          .filter((r) => r.paymentMethod === 'advance')
+          .reduce((sum, r) => sum + r.amount, 0);
+        const remaining = (activeTour.advancePayment || 0) - advanceSpent;
+        setAdvanceRemaining(remaining);
+        if (remaining <= 0) {
+          setPaymentMethod('cash');
+        } else {
+          setPaymentMethod('advance');
+        }
+      });
+  }, [isOpen, activeTour]);
+
+  if (!isOpen) return null;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!amount || Number(amount) <= 0 || !activeTour.id) return;
+
+    setIsSaving(true);
+    try {
+      let isInvoiceValid = false;
+      if (invoiceNumber.trim()) {
+        const validated = extractInvoiceNumbers(invoiceNumber);
+        if (validated.length > 0) {
+          isInvoiceValid = validated[0].isCheckDigitValid;
+        }
+      }
+
+      // 手入力用のプレースホルダー画像Canvas生成（視認性の高いアイコン風）
+      const canvas = document.createElement('canvas');
+      canvas.width = 400;
+      canvas.height = 300;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#1e293b';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#38bdf8';
+        ctx.font = 'bold 24px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('手動登録 レシート', 200, 130);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 36px sans-serif';
+        ctx.fillText(`¥${Number(amount).toLocaleString()}`, 200, 180);
+      }
+      const dummyImage = canvas.toDataURL('image/jpeg', 0.8);
+
+      const formattedInvoice = invoiceNumber.trim()
+        ? (invoiceNumber.trim().startsWith('T') ? invoiceNumber.trim() : `T${invoiceNumber.trim()}`)
+        : undefined;
+
+      const newReceipt: Omit<Receipt, 'id'> = {
+        tourId: activeTour.id,
+        category,
+        paymentMethod,
+        date,
+        amount: Number(amount),
+        place: place.trim() || 'その他経費',
+        invoiceNumber: formattedInvoice,
+        isInvoiceValid,
+        hasInvoiceHighlight: false,
+        processedImageUrl: dummyImage,
+        memo: memo.trim(),
+        createdAt: Date.now()
+      };
+
+      await db.receipts.add(newReceipt as Receipt);
+
+      // 🧠 手動登録した店舗名・科目を学習辞書に登録
+      if (place.trim()) {
+        await learnFromReceipt({
+          place: place.trim(),
+          category,
+          paymentMethod,
+          invoiceNumber: formattedInvoice,
+          source: 'manual'
+        });
+      }
+
+      onReceiptAdded();
+      onClose();
+    } catch (err) {
+      console.error('手動追加エラー:', err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div className="modal-title">
+            <Plus size={20} color="var(--primary)" />
+            経費レシートを手動入力
+          </div>
+          <button className="icon-btn" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          <div className="modal-body">
+            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 10 }}>
+              <div className="form-group">
+                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <DollarSign size={14} />
+                  支払金額 (税込) *
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <span style={{ position: 'absolute', left: 12, top: 13, color: '#60a5fa', fontWeight: 700 }}>
+                    ¥
+                  </span>
+                  <input
+                    type="number"
+                    className="form-input"
+                    style={{ paddingLeft: 28, fontFamily: 'var(--font-num)', fontWeight: 800, fontSize: '1.1rem' }}
+                    placeholder="1200"
+                    value={amount}
+                    onChange={(e) => setAmount(Number(e.target.value) || '')}
+                    required
+                    autoFocus
+                  />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <Calendar size={14} />
+                  利用日 *
+                </label>
+                <input
+                  type="date"
+                  className="form-input"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <MapPin size={14} />
+                利用場所・料金所・店名 *
+              </label>
+              <input
+                type="text"
+                className="form-input"
+                placeholder="例: 日光東照宮前 観光バス駐車場"
+                value={place}
+                onChange={(e) => setPlace(e.target.value)}
+                required
+              />
+            </div>
+
+            {/* 科目クイック選択ボタン */}
+            <div className="form-group">
+              <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Tag size={14} />
+                経費科目（タップで即選択）
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(62px, 1fr))', gap: 4, marginBottom: 8 }}>
+                {[
+                  { id: 'parking' as const, label: '駐車場', icon: '🅿️', defaultPay: 'cash' as const },
+                  { id: 'etc' as const, label: 'ETC', icon: '🚗', defaultPay: 'company_etc' as const },
+                  { id: 'toll' as const, label: '有料道', icon: '🛣️', defaultPay: 'cash' as const },
+                  { id: 'fuel' as const, label: '燃料', icon: '⛽', defaultPay: 'company_fuel' as const },
+                  { id: 'breakfast' as const, label: '朝食代', icon: '🍙', defaultPay: 'cash' as const },
+                  { id: 'lunch' as const, label: '昼食代', icon: '🍱', defaultPay: 'cash' as const },
+                  { id: 'night_meal' as const, label: '夜食代', icon: '🌙', defaultPay: 'cash' as const },
+                  { id: 'tea' as const, label: 'お茶代', icon: '🍵', defaultPay: 'cash' as const },
+                  { id: 'water' as const, label: 'ミネラル水', icon: '💧', defaultPay: 'cash' as const },
+                  { id: 'overtime' as const, label: '残業代', icon: '⏰', defaultPay: 'cash' as const },
+                  { id: 'taxi' as const, label: 'タクシー', icon: '🚕', defaultPay: 'cash' as const },
+                  { id: 'lodging' as const, label: '宿泊', icon: '🏨', defaultPay: 'cash' as const },
+                  { id: 'other' as const, label: 'その他', icon: '📦', defaultPay: 'cash' as const },
+                ].map((cat) => {
+                  const isSelected = category === cat.id;
+                  return (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => {
+                        setCategory(cat.id);
+                        if (!isSelected && cat.id === 'etc') {
+                          setPaymentMethod('company_etc');
+                        } else if (!isSelected && cat.id === 'fuel') {
+                          setPaymentMethod('company_fuel');
+                        } else if (!isSelected && cat.id !== 'etc' && cat.id !== 'fuel') {
+                          // 前払金が残っていればadvance、残高がなければcash（個人立替）に自動設定
+                          setPaymentMethod(advanceRemaining !== null && advanceRemaining <= 0 ? 'cash' : 'advance');
+                        }
+                      }}
+                      style={{
+                        padding: '6px 2px',
+                        borderRadius: 'var(--radius-sm)',
+                        fontSize: '0.7rem',
+                        fontWeight: isSelected ? 800 : 600,
+                        background: isSelected ? 'var(--primary)' : 'rgba(255, 255, 255, 0.04)',
+                        color: isSelected ? '#ffffff' : 'var(--text-muted)',
+                        border: isSelected
+                          ? '1px solid var(--primary)'
+                          : '1px solid var(--border-color)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        gap: 2,
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <span style={{ fontSize: '0.88rem' }}>{cat.icon}</span>
+                      <span style={{ whiteSpace: 'nowrap' }}>{cat.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div className="form-group">
+                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <Tag size={14} />
+                  科目詳細
+                </label>
+                <select
+                  className="form-input"
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value as ExpenseCategory)}
+                >
+                  <option value="breakfast">朝食代（食事・弁当）</option>
+                  <option value="lunch">昼食代（食事・弁当）</option>
+                  <option value="night_meal">夜食代（夜食・食事）</option>
+                  <option value="tea">お茶代・飲料費</option>
+                  <option value="water">ミネラルウォーター</option>
+                  <option value="parking">駐車場代</option>
+                  <option value="etc">ETC高速料金</option>
+                  <option value="toll">有料道路代（非ETC）</option>
+                  <option value="fuel">燃料・給油</option>
+                  <option value="taxi">タクシー代</option>
+                  <option value="lodging">宿泊代・ホテル</option>
+                  <option value="overtime">残業代・時間外手当</option>
+                  <option value="other">その他・雑費</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <CreditCard size={14} />
+                  支払手段
+                </label>
+                <select
+                  className="form-input"
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+                >
+                  <option value="advance">
+                    前払い金（仮払金から支払）{advanceRemaining !== null && advanceRemaining > 0 ? ` [残:¥${advanceRemaining.toLocaleString()}]` : ' [残高なし]'}
+                  </option>
+                  <option value="cash">個人立替（自己現金）</option>
+                  <option value="company_etc">会社ETCカード</option>
+                  <option value="company_fuel">燃料掛けカード</option>
+                  <option value="company_card">会社専用カード</option>
+                </select>
+
+                {/* 前払金残高連動ヒント */}
+                {advanceRemaining !== null && (
+                  <div
+                    style={{
+                      fontSize: '0.68rem',
+                      marginTop: 4,
+                      color: advanceRemaining <= 0 ? '#fbbf24' : '#34d399',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4
+                    }}
+                  >
+                    {advanceRemaining <= 0 ? (
+                      <span>⚠️ 前払金を使い切ったため、自動的に「個人立替」になります</span>
+                    ) : (
+                      <span>✓ 前払金残高: ¥{advanceRemaining.toLocaleString()}（使い切り次第、自動で個人立替）</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">インボイス登録番号（あれば）</label>
+              <input
+                type="text"
+                className="form-input"
+                placeholder="例: T1234567890123"
+                value={invoiceNumber}
+                onChange={(e) => setInvoiceNumber(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">備考・特記（複数行・手入力メモ）</label>
+              <textarea
+                rows={3}
+                className="form-input"
+                style={{
+                  resize: 'vertical',
+                  minHeight: 75,
+                  lineHeight: 1.5,
+                  fontSize: '0.85rem'
+                }}
+                placeholder="領収書手書き受領、急遽高速利用など（複数行・改行可）"
+                value={memo}
+                onChange={(e) => setMemo(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary" onClick={onClose}>
+              キャンセル
+            </button>
+            <button type="submit" className="btn-primary" disabled={isSaving}>
+              {isSaving ? '登録中...' : '登録する'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
