@@ -8,7 +8,8 @@ import {
   Camera,
   Edit3,
   Scissors,
-  Droplet
+  Droplet,
+  AlertTriangle
 } from 'lucide-react';
 import {
   db,
@@ -19,6 +20,7 @@ import {
 } from '../db';
 import { calculateTourSummary, generateTourExpensePdf, type PdfGenerationResult } from '../utils/pdfGenerator';
 import { sortReceiptsByDate } from '../utils/receiptSort';
+import { findDuplicateGroupsInTour } from '../utils/duplicateChecker';
 import { PdfPreviewModal } from './PdfPreviewModal';
 import { ManualReceiptModal } from './ManualReceiptModal';
 import { EditTourModal } from './EditTourModal';
@@ -28,6 +30,7 @@ import { ImageCropModal } from './ImageCropModal';
 interface TourDetailViewProps {
   tour: Tour;
   profile: DriverProfile;
+  refreshTrigger?: number;
   onBack: () => void;
   onOpenScanner: () => void;
   onOpenGeminiOcr?: () => void;
@@ -37,6 +40,7 @@ interface TourDetailViewProps {
 export const TourDetailView: React.FC<TourDetailViewProps> = ({
   tour,
   profile,
+  refreshTrigger,
   onBack,
   onOpenScanner,
   onOpenGeminiOcr,
@@ -64,7 +68,7 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
 
   useEffect(() => {
     loadReceipts();
-  }, [tour.id]);
+  }, [tour.id, refreshTrigger]);
 
   // レシート削除
   const handleDeleteReceipt = async (id?: number) => {
@@ -114,10 +118,16 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
 
   const summary = calculateTourSummary(receipts, tour.advancePayment);
 
+  // ツアー内の登録済みレシート同士で二重登録（重複）の疑いがあるものを自動検出
+  const duplicateMap = findDuplicateGroupsInTour(receipts);
+
   // フィルタリングされたレシート
-  const filteredReceipts = activeCategoryFilter === 'all'
-    ? receipts
-    : receipts.filter((r) => r.category === activeCategoryFilter);
+  const filteredReceipts =
+    activeCategoryFilter === 'all'
+      ? receipts
+      : activeCategoryFilter === 'duplicate'
+      ? receipts.filter((r) => r.id && duplicateMap.has(r.id))
+      : receipts.filter((r) => r.category === activeCategoryFilter);
 
   // カテゴリ別件数
   const counts = {
@@ -611,10 +621,56 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
         </button>
       </div>
 
+      {/* ⚠️ ツアー内二重登録（重複レシート）検知バナー */}
+      {duplicateMap.size > 0 && (
+        <div
+          style={{
+            padding: '12px 14px',
+            borderRadius: 'var(--radius-sm)',
+            background: 'rgba(245, 158, 11, 0.14)',
+            border: '1.5px solid rgba(245, 158, 11, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+            flexWrap: 'wrap'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.82rem', color: '#fde68a', fontWeight: 700 }}>
+            <AlertTriangle size={17} color="#fbbf24" style={{ flexShrink: 0 }} />
+            <span>
+              ⚠️ 二重登録の疑いがあるレシートが <strong>{duplicateMap.size}件</strong> あります（同じ日付・金額・店舗または画像）
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              setActiveCategoryFilter(activeCategoryFilter === 'duplicate' ? 'all' : 'duplicate')
+            }
+            style={{
+              padding: '5px 12px',
+              borderRadius: 'var(--radius-full)',
+              fontSize: '0.74rem',
+              fontWeight: 800,
+              background: activeCategoryFilter === 'duplicate' ? '#f59e0b' : 'rgba(245, 158, 11, 0.25)',
+              color: activeCategoryFilter === 'duplicate' ? '#0f172a' : '#fef08a',
+              border: '1px solid rgba(245, 158, 11, 0.6)',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            {activeCategoryFilter === 'duplicate' ? 'すべて表示に戻す' : `重複候補のみ表示 (${duplicateMap.size})`}
+          </button>
+        </div>
+      )}
+
       {/* カテゴリタブ */}
       <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
         {[
           { id: 'all', label: `すべて (${counts.all})` },
+          ...(duplicateMap.size > 0
+            ? [{ id: 'duplicate', label: `⚠️ 重複注意 (${duplicateMap.size})` }]
+            : []),
           { id: 'etc', label: `ETC (${counts.etc})` },
           { id: 'toll', label: `有料道 (${counts.toll})` },
           { id: 'parking', label: `駐車場 (${counts.parking})` },
@@ -671,6 +727,7 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
               displayAiMemo = displayMemo;
               displayMemo = '';
             }
+            const dupEntry = r.id ? duplicateMap.get(r.id) : undefined;
 
             return (
               <div
@@ -680,9 +737,51 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
                   display: 'flex',
                   flexDirection: 'column',
                   gap: 10,
-                  padding: '12px 14px'
+                  padding: '12px 14px',
+                  border: dupEntry
+                    ? '1.5px solid rgba(245, 158, 11, 0.7)'
+                    : undefined
                 }}
               >
+                {dupEntry && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      padding: '6px 10px',
+                      borderRadius: 6,
+                      background: 'rgba(245, 158, 11, 0.14)',
+                      border: '1px solid rgba(245, 158, 11, 0.4)',
+                      fontSize: '0.73rem',
+                      color: '#fde68a'
+                    }}
+                  >
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontWeight: 700, color: '#fbbf24' }}>
+                      <AlertTriangle size={13} color="#fbbf24" />
+                      ⚠️ 二重登録注意: {dupEntry.reasons.join(' / ')}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteReceipt(r.id)}
+                      style={{
+                        padding: '2px 8px',
+                        borderRadius: 4,
+                        background: 'rgba(239, 68, 68, 0.2)',
+                        border: '1px solid rgba(239, 68, 68, 0.45)',
+                        color: '#fca5a5',
+                        fontSize: '0.7rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      この明細を削除
+                    </button>
+                  </div>
+                )}
+
                 {/* 上段: サムネイル + 店舗/科目情報 + 金額/アクション */}
                 <div style={{ display: 'flex', gap: 12, alignItems: 'center', width: '100%' }}>
                   {/* サムネイル */}

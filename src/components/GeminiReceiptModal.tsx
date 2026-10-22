@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   X,
   Camera,
@@ -7,6 +7,7 @@ import {
   RefreshCw,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   Calendar,
   Store,
   FileCode,
@@ -18,10 +19,12 @@ import {
 import {
   analyzeReceiptWithGemini,
   fileToDataUrl,
+  mapAiCategoryToExpenseCategory,
   type GeminiReceiptResult,
   type GeminiReceiptItem
 } from '../utils/geminiOcrService';
 import { getAppConfig } from '../utils/configStorage';
+import { checkReceiptDuplicates, type DuplicateMatch } from '../utils/duplicateChecker';
 import type { Tour } from '../db';
 
 interface GeminiReceiptModalProps {
@@ -65,9 +68,54 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
   const [showJsonView, setShowJsonView] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [duplicates, setDuplicates] = useState<DuplicateMatch[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+
+  // モーダルが閉じた時に状態を初期化（前回のレシート誤再登録を防止）
+  useEffect(() => {
+    if (!isOpen) {
+      setSelectedImage(null);
+      setResult(null);
+      setEditDate('');
+      setEditShopName('');
+      setEditTotalAmount(0);
+      setEditItems([]);
+      setEditMemo('');
+      setDuplicates([]);
+      setAnalysisError(null);
+      setSaveSuccess(false);
+      setIsSaving(false);
+    }
+  }, [isOpen]);
+
+  // 入力値・解析結果が変わるたびに二重登録チェックを実行
+  useEffect(() => {
+    if (!isOpen || !result || isAnalyzing) {
+      setDuplicates([]);
+      return;
+    }
+
+    let cancelled = false;
+    checkReceiptDuplicates({
+      tourId: activeTour?.id,
+      date: editDate,
+      amount: Number(editTotalAmount) || 0,
+      place: editShopName,
+      category: mapAiCategoryToExpenseCategory(editCategory),
+      invoiceNumber: result.invoiceNumber,
+      imageUrl: selectedImage || undefined
+    }).then((found) => {
+      if (!cancelled) {
+        setDuplicates(found);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, result, isAnalyzing, editDate, editTotalAmount, editShopName, editCategory, selectedImage, activeTour?.id]);
 
   if (!isOpen) return null;
 
@@ -141,7 +189,29 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
 
   // 家計簿データへの登録
   const handleSave = async () => {
-    if (!selectedImage) return;
+    if (!selectedImage || isSaving || saveSuccess) return;
+
+    // 二重登録の可能性がある場合は確認ダイアログを表示
+    if (duplicates.length > 0) {
+      const topMatch = duplicates[0];
+      const msg = [
+        '⚠️ 二重登録の可能性があります！',
+        '',
+        `【既登録データ】`,
+        `・利用日: ${topMatch.existingReceipt.date}`,
+        `・場所/店名: ${topMatch.existingReceipt.place}`,
+        `・金額: ¥${topMatch.existingReceipt.amount.toLocaleString()}`,
+        `・判定理由: ${topMatch.reasons.join(' / ')}`,
+        '',
+        '同じレシート・領収書ではありませんか？',
+        '本当にこのまま追加登録してもよろしいですか？'
+      ].join('\n');
+
+      if (!window.confirm(msg)) {
+        return;
+      }
+    }
+
     setIsSaving(true);
     try {
       await onSaveToExpense({
@@ -602,6 +672,79 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
           {/* 解析結果表示＆編集フォーム */}
           {result && !isAnalyzing && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {/* ⚠️ 二重登録（重複レシート）検知アラート */}
+              {duplicates.length > 0 && (
+                <div
+                  style={{
+                    padding: '14px 16px',
+                    borderRadius: '16px',
+                    background: 'rgba(245, 158, 11, 0.16)',
+                    border: '2px solid rgba(245, 158, 11, 0.65)',
+                    color: '#fef3c7',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px',
+                    boxShadow: '0 4px 18px rgba(245, 158, 11, 0.2)'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 800, fontSize: '0.9rem', color: '#fbbf24' }}>
+                    <AlertTriangle size={20} color="#fbbf24" style={{ flexShrink: 0 }} />
+                    <span>⚠️ 二重登録の可能性があります！（類似明細 {duplicates.length}件）</span>
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: '#fde68a', lineHeight: 1.45 }}>
+                    すでに同じ日付・金額・店舗（または同一画像）のレシートが登録されています。二重登録でないかご確認ください。
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {duplicates.slice(0, 2).map((dup, idx) => (
+                      <div
+                        key={idx}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          padding: '8px 10px',
+                          borderRadius: '10px',
+                          background: 'rgba(15, 23, 42, 0.75)',
+                          border: '1px solid rgba(251, 191, 36, 0.35)',
+                          fontSize: '0.76rem'
+                        }}
+                      >
+                        {(dup.existingReceipt.processedImageUrl || dup.existingReceipt.originalImageUrl) && (
+                          <img
+                            src={dup.existingReceipt.processedImageUrl || dup.existingReceipt.originalImageUrl}
+                            alt="既登録レシート"
+                            style={{
+                              width: '38px',
+                              height: '44px',
+                              objectFit: 'cover',
+                              borderRadius: '6px',
+                              border: '1px solid rgba(255,255,255,0.2)',
+                              flexShrink: 0
+                            }}
+                          />
+                        )}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, color: '#ffffff' }}>
+                            <span>{dup.existingReceipt.date}</span>
+                            <span>・</span>
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {dup.existingReceipt.place}
+                            </span>
+                            <span style={{ marginLeft: 'auto', color: '#fbbf24', fontFamily: 'var(--font-num)' }}>
+                              ¥{dup.existingReceipt.amount.toLocaleString()}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '0.7rem', color: '#cbd5e1', marginTop: '2px' }}>
+                            {dup.isSameTour ? '【現在のツアー内で登録済】' : `【別ツアー ${dup.tourCode || ''} で登録済】`}{' '}
+                            {dup.reasons.join(' / ')}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* サマリーカード */}
               <div
                 style={{

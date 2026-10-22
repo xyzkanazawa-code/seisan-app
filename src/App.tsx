@@ -29,6 +29,7 @@ import {
   mapAiPaymentMethodToPaymentMethod
 } from './utils/geminiOcrService';
 import { learnFromReceipt } from './utils/learningService';
+import { computeImageHash } from './utils/duplicateChecker';
 
 export function App() {
   const [profile, setProfile] = useState<DriverProfile | null>(null);
@@ -41,6 +42,7 @@ export function App() {
   // アクティブツアーの集計状態
   const [activeReceiptsCount, setActiveReceiptsCount] = useState<number>(0);
   const [activeTotalExpense, setActiveTotalExpense] = useState<number>(0);
+  const [receiptsRefreshKey, setReceiptsRefreshKey] = useState<number>(0);
 
   // モーダル状態
   const [isScannerOpen, setIsScannerOpen] = useState(false);
@@ -267,6 +269,7 @@ export function App() {
   // 一括確定完了時
   const handleReviewCommitted = async () => {
     await refreshTours();
+    setReceiptsRefreshKey((prev) => prev + 1);
   };
 
   // Gemini OCRレシートを家計簿・精算データとして保存
@@ -280,8 +283,8 @@ export function App() {
     invoiceNumber?: string;
     memo?: string;
   }) => {
-    // 紐付けるツアーを特定（activeTourがあればそれを使用、なければ自動作成）
-    let targetTourId = activeTour?.id;
+    // 紐付けるツアーを特定（selectedTour または activeTour があればそれを使用、なければ自動作成）
+    let targetTourId = selectedTour?.id || activeTour?.id;
     if (!targetTourId) {
       const today = new Date().toISOString().split('T')[0];
       const newTour: Tour = {
@@ -309,6 +312,8 @@ export function App() {
       ? `【購入品目】\n` + receiptData.items.map(it => `・${it.name}: ¥${it.price.toLocaleString()}`).join('\n')
       : '';
 
+    const imageHash = await computeImageHash(receiptData.receiptImage);
+
     const newRecord: Omit<Receipt, 'id'> = {
       tourId: targetTourId,
       category: mappedCategory,
@@ -321,6 +326,7 @@ export function App() {
       hasInvoiceHighlight: false,
       originalImageUrl: receiptData.receiptImage,
       processedImageUrl: receiptData.receiptImage,
+      imageHash,
       memo: receiptData.memo || undefined, // 📝 手打ちで入力した備考
       aiMemo: itemsMemo || undefined,     // 🤖 AIが読み取った品目（別項目）
       createdAt: Date.now()
@@ -338,6 +344,7 @@ export function App() {
     });
 
     await refreshTours();
+    setReceiptsRefreshKey((prev) => prev + 1);
   };
 
   return (
@@ -362,6 +369,7 @@ export function App() {
         {selectedTour ? (
           <TourDetailView
             tour={selectedTour}
+            refreshTrigger={receiptsRefreshKey}
             profile={
               profile || {
                 driverName: appConfig?.name || 'マサ',
@@ -427,7 +435,7 @@ export function App() {
       <GeminiReceiptModal
         isOpen={isGeminiOcrOpen}
         onClose={() => setIsGeminiOcrOpen(false)}
-        activeTour={activeTour}
+        activeTour={selectedTour || activeTour}
         onOpenSettings={() => {
           setIsGeminiOcrOpen(false);
           setIsHouseholdInitialSetup(false);
@@ -457,7 +465,7 @@ export function App() {
       <ScannerModal
         isOpen={isScannerOpen}
         onClose={() => setIsScannerOpen(false)}
-        activeTour={activeTour}
+        activeTour={selectedTour || activeTour}
         initialEngine={scannerEngine}
         onScanCompleted={handleScanCompleted}
         onSwitchToGeminiOcr={() => setIsGeminiOcrOpen(true)}
@@ -469,11 +477,11 @@ export function App() {
       />
 
       {/* スキャン確認・編集 ＆ 「全部OK」一括確定モーダル */}
-      {activeTour && (
+      {(selectedTour || activeTour) && (
         <BatchReviewModal
           isOpen={isReviewOpen}
           onClose={() => setIsReviewOpen(false)}
-          activeTour={activeTour}
+          activeTour={(selectedTour || activeTour)!}
           initialItems={scannedItemsToReview}
           onCommitted={handleReviewCommitted}
         />

@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Calendar, DollarSign, MapPin, Tag, CreditCard } from 'lucide-react';
+import { X, Plus, Calendar, DollarSign, MapPin, Tag, CreditCard, AlertTriangle } from 'lucide-react';
 import { db, type Tour, type ExpenseCategory, type PaymentMethod, type Receipt } from '../db';
 import { extractInvoiceNumbers } from '../utils/invoiceValidator';
 import { learnFromReceipt } from '../utils/learningService';
+import { checkReceiptDuplicates, type DuplicateMatch } from '../utils/duplicateChecker';
 
 interface ManualReceiptModalProps {
   isOpen: boolean;
@@ -26,10 +27,19 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [memo, setMemo] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [duplicates, setDuplicates] = useState<DuplicateMatch[]>([]);
 
-  // モーダル表示時に前払金の残高を計算し、0以下なら自動的に個人立替に切り替え
+  // モーダル表示時にフォームを初期化＆前払金の残高を計算
   useEffect(() => {
-    if (!isOpen || !activeTour?.id) return;
+    if (!isOpen || !activeTour?.id) {
+      setDuplicates([]);
+      return;
+    }
+    setAmount('');
+    setPlace('');
+    setInvoiceNumber('');
+    setMemo('');
+    setDuplicates([]);
     db.receipts
       .where('tourId')
       .equals(activeTour.id)
@@ -48,11 +58,63 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
       });
   }, [isOpen, activeTour]);
 
+  // 入力中のリアルタイム二重登録チェック
+  useEffect(() => {
+    if (!isOpen || !amount || Number(amount) <= 0) {
+      setDuplicates([]);
+      return;
+    }
+
+    let cancelled = false;
+    const formattedInv = invoiceNumber.trim()
+      ? invoiceNumber.trim().startsWith('T')
+        ? invoiceNumber.trim()
+        : `T${invoiceNumber.trim()}`
+      : undefined;
+
+    checkReceiptDuplicates({
+      tourId: activeTour?.id,
+      date,
+      amount: Number(amount),
+      place: place.trim(),
+      category,
+      invoiceNumber: formattedInv
+    }).then((found) => {
+      if (!cancelled) {
+        setDuplicates(found);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, activeTour?.id, date, amount, place, category, invoiceNumber]);
+
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!amount || Number(amount) <= 0 || !activeTour.id) return;
+    if (!amount || Number(amount) <= 0 || !activeTour.id || isSaving) return;
+
+    if (duplicates.length > 0) {
+      const top = duplicates[0];
+      const msg = [
+        '⚠️ 二重登録の可能性があります！',
+        '',
+        '【既登録データ】',
+        `・利用日: ${top.existingReceipt.date}`,
+        `・場所/店名: ${top.existingReceipt.place}`,
+        `・金額: ¥${top.existingReceipt.amount.toLocaleString()}`,
+        `・判定理由: ${top.reasons.join(' / ')}`,
+        '',
+        '同じレシート・領収書が既に登録されている可能性があります。',
+        '本当にこのまま追加登録してもよろしいですか？'
+      ].join('\n');
+
+      if (!window.confirm(msg)) {
+        return;
+      }
+    }
 
     setIsSaving(true);
     try {
@@ -138,6 +200,34 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
 
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
+            {duplicates.length > 0 && (
+              <div
+                style={{
+                  padding: '12px 14px',
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'rgba(245, 158, 11, 0.16)',
+                  border: '2px solid rgba(245, 158, 11, 0.65)',
+                  color: '#fef3c7',
+                  fontSize: '0.78rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, color: '#fbbf24', fontSize: '0.84rem' }}>
+                  <AlertTriangle size={16} color="#fbbf24" />
+                  <span>⚠️ 二重登録の可能性があります（類似明細 {duplicates.length}件）</span>
+                </div>
+                {duplicates.slice(0, 2).map((dup, i) => (
+                  <div key={i} style={{ color: '#fde68a', lineHeight: 1.4 }}>
+                    ・{dup.isSameTour ? '【現在のツアー】' : `【別ツアー ${dup.tourCode || ''}】`}{' '}
+                    {dup.existingReceipt.date} / <strong>{dup.existingReceipt.place}</strong> /{' '}
+                    ¥{dup.existingReceipt.amount.toLocaleString()}（{dup.reasons.join(' / ')}）
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 10 }}>
               <div className="form-group">
                 <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>

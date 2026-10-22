@@ -61,6 +61,7 @@ export interface Receipt {
   hasInvoiceHighlight?: boolean; // ハイライト処理済みか
   originalImageUrl?: string;  // 元画像 (Data URL)
   processedImageUrl: string;  // 証拠画像（黄色ハイライト付きData URL）
+  imageHash?: string;         // 二重登録防止用の画像知覚ハッシュ
   etcDetails?: EtcDetails;    // ETC分割情報
   memo?: string;              // 備考（手入力）
   aiMemo?: string;            // AI読取項目（品目・OCR解析情報）

@@ -9,6 +9,7 @@ import {
   CreditCard,
   Sparkles,
   AlertCircle,
+  AlertTriangle,
   X,
   Scissors
 } from 'lucide-react';
@@ -18,6 +19,12 @@ import { detectCategoryAndPlace, type ParsedReceiptItem } from '../utils/ocrServ
 import { learnFromReceipt } from '../utils/learningService';
 import { sortReceiptsByDate } from '../utils/receiptSort';
 import { autoTightCrop } from '../utils/imageProcessor';
+import {
+  checkReceiptDuplicates,
+  evaluateDuplicatePair,
+  computeImageHash,
+  type DuplicateMatch
+} from '../utils/duplicateChecker';
 import { ImageCropModal } from './ImageCropModal';
 
 interface BatchReviewModalProps {
@@ -40,6 +47,9 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
   const [initialAdvanceRemaining, setInitialAdvanceRemaining] = useState<number>(0);
   const [cropTargetItem, setCropTargetItem] = useState<{ id: string; url: string } | null>(null);
   const [tighteningId, setTighteningId] = useState<string | null>(null);
+  const [itemDuplicates, setItemDuplicates] = useState<
+    Record<string, { dbMatches: DuplicateMatch[]; batchMatchIndex?: number; batchReasons?: string[] }>
+  >({});
 
   // ワンタップ余白自動カット
   const handleQuickTighten = async (item: ParsedReceiptItem) => {
@@ -122,7 +132,114 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
       });
   }, [initialItems, activeTour]);
 
+  // スキャン結果一覧と既存DB・およびバッチ内同士での二重登録チェック
+  React.useEffect(() => {
+    if (!isOpen || items.length === 0) {
+      setItemDuplicates({});
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      const nextMap: Record<
+        string,
+        { dbMatches: DuplicateMatch[]; batchMatchIndex?: number; batchReasons?: string[] }
+      > = {};
+
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        const dbMatches = await checkReceiptDuplicates({
+          tourId: activeTour?.id,
+          date: it.date,
+          amount: Number(it.amount) || 0,
+          place: it.place,
+          category: it.category,
+          invoiceNumber: it.invoiceNumber,
+          imageUrl: it.originalImageUrl || it.processedImageUrl,
+          imageHash: it.imageHash
+        });
+
+        // 同じ一括スキャン内の先行アイテムと重複していないかもチェック（ETC区間分割は除く）
+        let batchMatchIndex: number | undefined;
+        let batchReasons: string[] | undefined;
+
+        for (let j = 0; j < i; j++) {
+          const prev = items[j];
+          if (
+            it.category === 'etc' &&
+            prev.category === 'etc' &&
+            it.etcDetails?.splitIndex !== undefined &&
+            prev.etcDetails?.splitIndex !== undefined &&
+            it.etcDetails.splitIndex !== prev.etcDetails.splitIndex
+          ) {
+            continue;
+          }
+
+          const pairEval = evaluateDuplicatePair(
+            {
+              tourId: activeTour?.id,
+              date: it.date,
+              amount: Number(it.amount) || 0,
+              place: it.place,
+              category: it.category,
+              invoiceNumber: it.invoiceNumber,
+              imageUrl: it.originalImageUrl || it.processedImageUrl
+            },
+            {
+              tourId: activeTour?.id || 0,
+              category: prev.category,
+              paymentMethod: prev.paymentMethod,
+              date: prev.date,
+              amount: Number(prev.amount) || 0,
+              place: prev.place,
+              invoiceNumber: prev.invoiceNumber,
+              originalImageUrl: prev.originalImageUrl,
+              processedImageUrl: prev.processedImageUrl,
+              createdAt: Date.now()
+            }
+          );
+
+          if (pairEval) {
+            batchMatchIndex = j + 1;
+            batchReasons = pairEval.reasons;
+            break;
+          }
+        }
+
+        if (dbMatches.length > 0 || batchMatchIndex !== undefined) {
+          nextMap[it.id] = {
+            dbMatches,
+            batchMatchIndex,
+            batchReasons
+          };
+        }
+      }
+
+      if (!cancelled) {
+        setItemDuplicates(nextMap);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, items, activeTour?.id]);
+
   if (!isOpen || items.length === 0) return null;
+
+  const duplicateItemIds = Object.keys(itemDuplicates);
+
+  // 重複候補を一括でリストから除外
+  const removeDuplicateItems = () => {
+    const remaining = items.filter((item) => !itemDuplicates[item.id]);
+    if (remaining.length === 0) {
+      if (window.confirm('すべてのスキャン項目が重複候補です。登録をキャンセルして閉じますか？')) {
+        onClose();
+      }
+      return;
+    }
+    setItems(remaining);
+  };
 
   // 1件の編集ハンドラ
   const updateItem = (id: string, updates: Partial<ParsedReceiptItem>) => {
@@ -141,29 +258,52 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
 
   // 「全部OK」一括確定処理
   const handleCommitAll = async () => {
-    if (items.length === 0 || !activeTour.id) return;
+    if (items.length === 0 || !activeTour.id || isSaving) return;
+
+    if (duplicateItemIds.length > 0) {
+      const msg = [
+        `⚠️ 二重登録（重複）の可能性があるレシートが ${duplicateItemIds.length} 件含まれています！`,
+        '',
+        'すでに登録済みのレシート、または今回同時スキャンした同一レシートと日付・金額・場所・画像が一致しています。',
+        '',
+        'このまま重複候補も含めてすべて保存してもよろしいですか？',
+        '（「キャンセル」を押すと確認画面に戻り、重複分のみ除外できます）'
+      ].join('\n');
+
+      if (!window.confirm(msg)) {
+        return;
+      }
+    }
 
     setIsSaving(true);
     // 常に日付順（時系列昇順）に並び替えてからDBへ確定保存
     const sortedItems = sortReceiptsByDate(items);
     const baseNow = Date.now();
     try {
-      const recordsToInsert: Omit<Receipt, 'id'>[] = sortedItems.map((item, index) => ({
-        tourId: activeTour.id!,
-        category: item.category,
-        paymentMethod: item.paymentMethod,
-        date: item.date,
-        amount: Number(item.amount) || 0,
-        place: item.place || '経費',
-        invoiceNumber: item.invoiceNumber,
-        isInvoiceValid: item.isInvoiceValid,
-        hasInvoiceHighlight: item.hasInvoiceHighlight,
-        originalImageUrl: item.originalImageUrl,
-        processedImageUrl: item.processedImageUrl,
-        etcDetails: item.etcDetails,
-        memo: item.memo,
-        createdAt: baseNow + index
-      }));
+      const recordsToInsert: Omit<Receipt, 'id'>[] = [];
+      for (let index = 0; index < sortedItems.length; index++) {
+        const item = sortedItems[index];
+        const imageHash =
+          item.imageHash ||
+          (await computeImageHash(item.originalImageUrl || item.processedImageUrl));
+        recordsToInsert.push({
+          tourId: activeTour.id!,
+          category: item.category,
+          paymentMethod: item.paymentMethod,
+          date: item.date,
+          amount: Number(item.amount) || 0,
+          place: item.place || '経費',
+          invoiceNumber: item.invoiceNumber,
+          isInvoiceValid: item.isInvoiceValid,
+          hasInvoiceHighlight: item.hasInvoiceHighlight,
+          originalImageUrl: item.originalImageUrl,
+          processedImageUrl: item.processedImageUrl,
+          imageHash,
+          etcDetails: item.etcDetails,
+          memo: item.memo,
+          createdAt: baseNow + index
+        });
+      }
 
       // 一括トランザクションでローカルIndexedDBに保存
       await db.receipts.bulkAdd(recordsToInsert as Receipt[]);
@@ -300,17 +440,117 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
             </button>
           </div>
 
-          {items.map((item, index) => (
+          {/* ⚠️ 二重登録（重複候補）一括警告バー */}
+          {duplicateItemIds.length > 0 && (
+            <div
+              style={{
+                padding: '12px 14px',
+                borderRadius: 'var(--radius-sm)',
+                background: 'rgba(245, 158, 11, 0.16)',
+                border: '2px solid rgba(245, 158, 11, 0.65)',
+                color: '#fef3c7',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                flexWrap: 'wrap'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.82rem', fontWeight: 700 }}>
+                <AlertTriangle size={18} color="#fbbf24" style={{ flexShrink: 0 }} />
+                <span>
+                  ⚠️ 二重登録の可能性があるレシートが <strong>{duplicateItemIds.length}件</strong> 検出されました！
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={removeDuplicateItems}
+                style={{
+                  fontSize: '0.75rem',
+                  fontWeight: 800,
+                  padding: '6px 12px',
+                  borderRadius: 6,
+                  background: '#f59e0b',
+                  color: '#0f172a',
+                  border: 'none',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                重複候補を一括除外 ({duplicateItemIds.length}件)
+              </button>
+            </div>
+          )}
+
+          {items.map((item, index) => {
+            const dupInfo = itemDuplicates[item.id];
+            return (
             <div
               key={item.id}
               className="glass-card"
               style={{
                 padding: 16,
                 background: 'var(--bg-surface)',
-                border: '1px solid var(--border-color)',
+                border: dupInfo
+                  ? '2px solid rgba(245, 158, 11, 0.75)'
+                  : '1px solid var(--border-color)',
                 position: 'relative'
               }}
             >
+              {/* 個別カードの二重登録アラート */}
+              {dupInfo && (
+                <div
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'rgba(245, 158, 11, 0.15)',
+                    border: '1px solid rgba(245, 158, 11, 0.5)',
+                    marginBottom: 12,
+                    fontSize: '0.76rem',
+                    color: '#fde68a',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 6
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, color: '#fbbf24', fontSize: '0.8rem' }}>
+                      <AlertTriangle size={15} color="#fbbf24" />
+                      二重登録の疑い（重複検知）
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeItem(item.id)}
+                      style={{
+                        padding: '3px 8px',
+                        borderRadius: 4,
+                        background: 'rgba(239, 68, 68, 0.25)',
+                        border: '1px solid rgba(239, 68, 68, 0.5)',
+                        color: '#fca5a5',
+                        fontSize: '0.7rem',
+                        fontWeight: 700,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      重複のため除外
+                    </button>
+                  </div>
+
+                  {dupInfo.batchMatchIndex !== undefined && (
+                    <div>
+                      ・今回のスキャン一覧の <strong>#{dupInfo.batchMatchIndex}</strong> と重複しています（{dupInfo.batchReasons?.join(' / ')}）
+                    </div>
+                  )}
+
+                  {dupInfo.dbMatches.slice(0, 2).map((m, mIdx) => (
+                    <div key={mIdx}>
+                      ・{m.isSameTour ? '【登録済】' : `【別ツアー ${m.tourCode || ''}】`} {m.existingReceipt.date} /{' '}
+                      <strong>{m.existingReceipt.place}</strong> / ¥{m.existingReceipt.amount.toLocaleString()}（{m.reasons.join(' / ')}）
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {/* カード上部：通番 & 削除ボタン */}
               <div
                 style={{
@@ -771,7 +1011,8 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
                 </div>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* フッター：「全部OK」一括確定ボタン（仕様書最重要アクション） */}

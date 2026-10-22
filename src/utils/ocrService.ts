@@ -15,6 +15,7 @@ export interface ParsedReceiptItem {
   hasInvoiceHighlight: boolean;
   originalImageUrl: string;
   processedImageUrl: string;
+  imageHash?: string;
   etcDetails?: EtcDetails;
   memo?: string;
   aiMemo?: string;
