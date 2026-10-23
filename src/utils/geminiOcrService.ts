@@ -14,6 +14,10 @@ export interface GeminiReceiptResult {
   category?: string;     // 推定カテゴリ
   paymentMethod?: string;// 推定支払方法
   invoiceNumber?: string;// インボイス番号
+  entryGate?: string;    // ETC入口
+  exitGate?: string;     // ETC出口
+  etcType?: 'jissha' | 'kaiso'; // 実車または回送の推定（記載があれば）
+  splitBox?: { topPct: number; bottomPct: number }; // 縦方向の比率
   rawJson?: string;      // 生のJSON文字列
 }
 
@@ -130,11 +134,12 @@ export async function optimizeImageForGemini(dataUrl: string, maxDimension = 160
 
 /**
  * Gemini Flash モデルを活用した運行経費レシートOCR解析API呼び出し
+ * （縦に連続したETC利用明細や複数レシートを自動分離して配列で返却）
  */
-export async function analyzeReceiptWithGemini(
+export async function analyzeReceiptsWithGemini(
   imageDataUrl: string,
   customApiKey?: string
-): Promise<GeminiReceiptResult> {
+): Promise<GeminiReceiptResult[]> {
   // 1. APIキーの解決
   const config = getAppConfig();
   const apiKey = (customApiKey || config?.geminiApiKey || '').trim();
@@ -149,18 +154,45 @@ export async function analyzeReceiptWithGemini(
   const optimizedDataUrl = await optimizeImageForGemini(imageDataUrl);
   const { mimeType, base64Data } = extractMimeAndBase64(optimizedDataUrl);
 
-  // 3. プロンプト定義
+  // 3. プロンプト定義（縦連続ETC明細の完全分離指示）
   const prompt = `あなたはバス乗務員・運行経費（ETC利用証明書、有料道路、駐車場、ガソリン燃料、タクシー、宿泊、その他経費）の高精度OCR解析エンジンです。
-添付されたレシート・利用証明書画像から情報を正確に読み取り、必ず指定されたJSON形式で返却してください。
+添付された画像から情報を正確に読み取り、必ず指定されたJSON形式で返却してください。
 
-【抽出項目】
-1. date: 利用日・購入日。必ず "YYYY-MM-DD" 形式（例: "2026-10-09"）。レシート内に年がない場合は今年（2026年）を補完。不明なら今日の日付。
-2. shopName: 店舗名・料金所名・事業者名（例: "東名高速 東京料金所", "タイムズ駐車場 新宿", "出光セルフ ガソリンスタンド"）。
-3. items: 品目・内訳リストの配列。各要素は { "name": "品目・区間名", "price": 単価または利用額(数値) }。
-4. totalAmount: 合計金額・支払総額（カンマ無しの半角数値）。小計ではなく支払い合計額。
-5. category: 適切な経費カテゴリ（"ETC" | "駐車場" | "燃料" | "有料道路" | "朝食代" | "昼食代" | "夜食代" | "お茶代" | "ミネラルウォーター" | "残業代" | "タクシー" | "宿泊" | "その他" のいずれか。飲食・コンビニ等で朝食なら"朝食代"、昼食なら"昼食代"、夜なら"夜食代"、お茶やコーヒーなら"お茶代"、水・天然水なら"ミネラルウォーター"、残業・時間外手当なら"残業代"）。
-6. paymentMethod: 支払方法（"前払い金" | "現金" | "会社ETC" | "会社カード" | "燃料カード" | "その他"）。
-7. invoiceNumber: インボイス登録番号（"T" + 13桁の数字。例: "T1234567890123"）。記載がない場合は空文字 ""。
+【超重要指示：縦に連続したETC利用明細・複数レシートの分離】
+- ETC利用証明書・利用明細書は、1本の細長い紙に複数の利用区間・走行明細（複数の「御利用書」「ETC利用証明書」「利用明細」「通行料金」「料金所」）が縦に連続して印字されていることが多々あります。
+- また、複数枚の領収書・レシートが1枚の写真に写っている場合もあります。
+- このような場合、決して1枚に合算したり1件だけにまとめず、【必ず1走行・1区間・1枚ごとに分離したレシート配列】として出力してください！
+- レシートが1枚だけの場合でも、配列 "receipts": [ ... ] の形式で出力してください。
+
+【各レシートの抽出項目】
+1. date: 利用日・購入日。必ず "YYYY-MM-DD" 形式（例: "2026-10-09"）。年がない場合は今年（2026年）を補完。
+2. shopName: 店舗名・料金所名・区間名（ETCの場合は "ETC: 東京 → 厚木IC" のように区間がわかる名称にしてください）。
+3. entryGate: ETCの場合の入口料金所名（例: "東京", "厚木"）。不明なら空文字。
+4. exitGate: ETCの場合の出口料金所名（例: "沼津", "小田原"）。不明なら空文字。
+5. items: 内訳リスト [{ "name": "品目名または区間名", "price": 数値 }]。
+6. totalAmount: その区間・レシートの支払金額（半角数値）。
+7. category: 経費カテゴリ（"ETC" | "駐車場" | "燃料" | "有料道路" | "朝食代" | "昼食代" | "夜食代" | "お茶代" | "ミネラルウォーター" | "残業代" | "タクシー" | "宿泊" | "その他"）。
+8. paymentMethod: 支払方法（"会社ETC" | "前払い金" | "現金" | "会社カード" | "燃料カード" | "その他"）。ETCの場合は "会社ETC"。
+9. invoiceNumber: インボイス登録番号（"T" + 13桁の数字）。なければ空文字。
+10. splitBox: 縦に連続したレシートの場合、その区間が画像全体の縦方向のどの位置にあるか（0.0〜1.0）。例: {"topPct": 0.0, "bottomPct": 0.5}。1枚だけなら {"topPct": 0.0, "bottomPct": 1.0}。
+
+【返却JSONスキーマ】
+{
+  "receipts": [
+    {
+      "date": "2026-10-09",
+      "shopName": "ETC: 東京 → 海老名IC",
+      "entryGate": "東京",
+      "exitGate": "海老名",
+      "items": [{ "name": "東名高速道路", "price": 1850 }],
+      "totalAmount": 1850,
+      "category": "ETC",
+      "paymentMethod": "会社ETC",
+      "invoiceNumber": "T1234567890123",
+      "splitBox": { "topPct": 0.0, "bottomPct": 0.5 }
+    }
+  ]
+}
 
 【出力仕様】
 - Markdownの修飾コードブロック（\`\`\`json 等）を含めず、純粋なJSON文字列として出力してください。
@@ -189,7 +221,7 @@ export async function analyzeReceiptWithGemini(
     }
   };
 
-  // 4. APIキーで使用可能なモデル候補（動的検出 + 静的フォールバック）
+  // 4. APIキーで使用可能なモデル候補
   let candidateModels = [
     'gemini-2.5-flash',
     'gemini-2.0-flash',
@@ -239,7 +271,7 @@ export async function analyzeReceiptWithGemini(
 
       if (response.ok) {
         responseJson = await response.json();
-        break; // 成功したためループを抜ける
+        break;
       }
 
       let errorDetail = '';
@@ -252,7 +284,6 @@ export async function analyzeReceiptWithGemini(
 
       lastError = errorDetail;
 
-      // 404 (Model not found) の場合は次のモデル候補を試行
       if (response.status === 404) {
         console.warn(`モデル ${modelName} が404のため次の候補を試行します:`, errorDetail);
         continue;
@@ -299,27 +330,83 @@ export async function analyzeReceiptWithGemini(
     throw new Error('Geminiの出力データをJSONとして解析できませんでした。');
   }
 
-  // 6. データの正規化
+  // 6. データの正規化（配列へのマッピング）
+  let rawList: any[] = [];
+  if (Array.isArray(parsed)) {
+    rawList = parsed;
+  } else if (Array.isArray(parsed?.receipts)) {
+    rawList = parsed.receipts;
+  } else if (typeof parsed === 'object' && parsed !== null) {
+    rawList = [parsed];
+  }
+
+  if (rawList.length === 0) {
+    rawList = [parsed];
+  }
+
   const today = new Date().toISOString().split('T')[0];
-  const normalizedResult: GeminiReceiptResult = {
-    date: typeof parsed.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : today,
-    shopName: typeof parsed.shopName === 'string' && parsed.shopName.trim() ? parsed.shopName.trim() : '運行経費',
-    items: Array.isArray(parsed.items)
-      ? parsed.items.map((it: any) => ({
+
+  const results: GeminiReceiptResult[] = rawList.map((item: any, idx: number) => {
+    const totalAmount = Number(item.totalAmount) || 0;
+    const itemsList = Array.isArray(item.items)
+      ? item.items.map((it: any) => ({
           name: String(it?.name || '利用明細').trim(),
           price: Number(it?.price) || 0
         }))
-      : [],
-    totalAmount: Number(parsed.totalAmount) || 0,
-    category: parsed.category || 'その他',
-    paymentMethod: parsed.paymentMethod || '現金',
-    invoiceNumber: typeof parsed.invoiceNumber === 'string' ? parsed.invoiceNumber.trim() : '',
-    rawJson: JSON.stringify(parsed, null, 2)
-  };
+      : [];
 
-  if (normalizedResult.totalAmount === 0 && normalizedResult.items.length > 0) {
-    normalizedResult.totalAmount = normalizedResult.items.reduce((s, it) => s + it.price, 0);
+    let entryGate = typeof item.entryGate === 'string' ? item.entryGate.trim() : undefined;
+    let exitGate = typeof item.exitGate === 'string' ? item.exitGate.trim() : undefined;
+
+    let shopName = typeof item.shopName === 'string' && item.shopName.trim()
+      ? item.shopName.trim()
+      : '運行経費';
+
+    // ETCの場合にIC名をshopNameに補完
+    if (entryGate && exitGate && (!shopName || shopName === '運行経費' || shopName.includes('ETC'))) {
+      shopName = `ETC: ${entryGate} → ${exitGate}`;
+    }
+
+    let splitBox = item.splitBox;
+    if (!splitBox && rawList.length > 1) {
+      // 均等スライス比率を補完
+      const segSize = 1 / rawList.length;
+      splitBox = {
+        topPct: Number((idx * segSize).toFixed(2)),
+        bottomPct: Number(((idx + 1) * segSize).toFixed(2))
+      };
+    }
+
+    const res: GeminiReceiptResult = {
+      date: typeof item.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item.date) ? item.date : today,
+      shopName,
+      entryGate,
+      exitGate,
+      items: itemsList,
+      totalAmount: totalAmount > 0 ? totalAmount : itemsList.reduce((s: number, it: any) => s + it.price, 0),
+      category: item.category || 'その他',
+      paymentMethod: item.paymentMethod || '会社ETC',
+      invoiceNumber: typeof item.invoiceNumber === 'string' ? item.invoiceNumber.trim() : '',
+      splitBox,
+      rawJson: JSON.stringify(item, null, 2)
+    };
+
+    return res;
+  });
+
+  return results;
+}
+
+/**
+ * 従来の単一結果返却API（互換用）
+ */
+export async function analyzeReceiptWithGemini(
+  imageDataUrl: string,
+  customApiKey?: string
+): Promise<GeminiReceiptResult> {
+  const results = await analyzeReceiptsWithGemini(imageDataUrl, customApiKey);
+  if (results.length === 0) {
+    throw new Error('レシート情報を解析できませんでした。');
   }
-
-  return normalizedResult;
+  return results[0];
 }

@@ -260,7 +260,16 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
   const handleCommitAll = async () => {
     if (items.length === 0 || !activeTour.id || isSaving) return;
 
-    if (duplicateItemIds.length > 0) {
+    // 二重登録の警告確認（ETC以外の重複、または同一画像がある場合のみ確認）
+    const hasSevereDuplicates = duplicateItemIds.some((id) => {
+      const info = itemDuplicates[id];
+      if (!info) return false;
+      const isExact = info.dbMatches.some(m => m.confidence === 'exact_image');
+      const hasNonEtc = info.dbMatches.some(m => !m.isEtc);
+      return isExact || hasNonEtc || (info.batchReasons && info.batchReasons.length > 0);
+    });
+
+    if (hasSevereDuplicates) {
       const msg = [
         `⚠️ 二重登録（重複）の可能性があるレシートが ${duplicateItemIds.length} 件含まれています！`,
         '',
@@ -300,6 +309,8 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
           processedImageUrl: item.processedImageUrl,
           imageHash,
           etcDetails: item.etcDetails,
+          etcType: item.category === 'etc' ? (item.etcType || 'jissha') : undefined,
+          etcPaidByGuide: item.category === 'etc' ? Boolean(item.etcPaidByGuide) : undefined,
           memo: item.memo,
           createdAt: baseNow + index
         });
@@ -484,6 +495,9 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
 
           {items.map((item, index) => {
             const dupInfo = itemDuplicates[item.id];
+            const isEtcItem = item.category === 'etc';
+            const isEtcOnlyDup = dupInfo && isEtcItem && dupInfo.dbMatches.every(m => m.isEtc) && (!dupInfo.batchReasons || dupInfo.batchReasons.length === 0);
+
             return (
             <div
               key={item.id}
@@ -492,63 +506,85 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
                 padding: 16,
                 background: 'var(--bg-surface)',
                 border: dupInfo
-                  ? '2px solid rgba(245, 158, 11, 0.75)'
+                  ? (isEtcOnlyDup ? '1.5px solid rgba(59, 130, 246, 0.45)' : '2px solid rgba(245, 158, 11, 0.75)')
                   : '1px solid var(--border-color)',
                 position: 'relative'
               }}
             >
               {/* 個別カードの二重登録アラート */}
               {dupInfo && (
-                <div
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 'var(--radius-sm)',
-                    background: 'rgba(245, 158, 11, 0.15)',
-                    border: '1px solid rgba(245, 158, 11, 0.5)',
-                    marginBottom: 12,
-                    fontSize: '0.76rem',
-                    color: '#fde68a',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 6
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, color: '#fbbf24', fontSize: '0.8rem' }}>
-                      <AlertTriangle size={15} color="#fbbf24" />
-                      二重登録の疑い（重複検知）
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => removeItem(item.id)}
-                      style={{
-                        padding: '3px 8px',
-                        borderRadius: 4,
-                        background: 'rgba(239, 68, 68, 0.25)',
-                        border: '1px solid rgba(239, 68, 68, 0.5)',
-                        color: '#fca5a5',
-                        fontSize: '0.7rem',
-                        fontWeight: 700,
-                        cursor: 'pointer'
-                      }}
-                    >
-                      重複のため除外
-                    </button>
+                isEtcOnlyDup ? (
+                  /* ETCの控えめアラート */
+                  <div
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 'var(--radius-sm)',
+                      background: 'rgba(59, 130, 246, 0.1)',
+                      border: '1px solid rgba(59, 130, 246, 0.3)',
+                      marginBottom: 10,
+                      fontSize: '0.74rem',
+                      color: '#93c5fd',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6
+                    }}
+                  >
+                    <AlertCircle size={14} color="#60a5fa" />
+                    <span>ℹ️ 同日の同一ETC区間の登録歴あり（※往復等は正常な利用です）</span>
                   </div>
-
-                  {dupInfo.batchMatchIndex !== undefined && (
-                    <div>
-                      ・今回のスキャン一覧の <strong>#{dupInfo.batchMatchIndex}</strong> と重複しています（{dupInfo.batchReasons?.join(' / ')}）
+                ) : (
+                  /* ETC以外の目立つアラート（今と同じ） */
+                  <div
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 'var(--radius-sm)',
+                      background: 'rgba(245, 158, 11, 0.15)',
+                      border: '1px solid rgba(245, 158, 11, 0.5)',
+                      marginBottom: 12,
+                      fontSize: '0.76rem',
+                      color: '#fde68a',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, color: '#fbbf24', fontSize: '0.8rem' }}>
+                        <AlertTriangle size={15} color="#fbbf24" />
+                        二重登録の疑い（重複検知）
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => removeItem(item.id)}
+                        style={{
+                          padding: '3px 8px',
+                          borderRadius: 4,
+                          background: 'rgba(239, 68, 68, 0.25)',
+                          border: '1px solid rgba(239, 68, 68, 0.5)',
+                          color: '#fca5a5',
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        重複のため除外
+                      </button>
                     </div>
-                  )}
 
-                  {dupInfo.dbMatches.slice(0, 2).map((m, mIdx) => (
-                    <div key={mIdx}>
-                      ・{m.isSameTour ? '【登録済】' : `【別ツアー ${m.tourCode || ''}】`} {m.existingReceipt.date} /{' '}
-                      <strong>{m.existingReceipt.place}</strong> / ¥{m.existingReceipt.amount.toLocaleString()}（{m.reasons.join(' / ')}）
-                    </div>
-                  ))}
-                </div>
+                    {dupInfo.batchMatchIndex !== undefined && (
+                      <div>
+                        同時スキャンの <strong>#{dupInfo.batchMatchIndex + 1}</strong> と重複しています。
+                      </div>
+                    )}
+
+                    {dupInfo.dbMatches.map((m, mIdx) => (
+                      <div key={mIdx}>
+                        {m.isSameTour ? '【現在運行内】' : `【別ツアー ${m.tourCode || ''}】`}{' '}
+                        {m.existingReceipt.date} / {m.existingReceipt.place} / ¥{m.existingReceipt.amount.toLocaleString()}（{m.reasons.join(' / ')}）
+                      </div>
+                    ))}
+                  </div>
+                )
               )}
 
               {/* カード上部：通番 & 削除ボタン */}
@@ -960,6 +996,103 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
                     </select>
                   </div>
                 </div>
+
+                {/* ETC専用: 実車/回送ボタン & ガイド預り金切替ボタン */}
+                {item.category === 'etc' && (
+                  <div
+                    style={{
+                      padding: 10,
+                      borderRadius: 'var(--radius-sm)',
+                      background: 'rgba(59, 130, 246, 0.08)',
+                      border: '1px solid rgba(59, 130, 246, 0.25)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8
+                    }}
+                  >
+                    {/* 回送 / 実車 ボタン */}
+                    <div>
+                      <div style={{ fontSize: '0.74rem', color: '#60a5fa', fontWeight: 800, marginBottom: 4 }}>
+                        🚗 ETC運行分類
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                        <button
+                          type="button"
+                          onClick={() => updateItem(item.id, { etcType: 'jissha' })}
+                          style={{
+                            padding: '6px 8px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: (item.etcType || 'jissha') === 'jissha' ? '2px solid #3b82f6' : '1px solid var(--border-color)',
+                            background: (item.etcType || 'jissha') === 'jissha' ? 'rgba(59, 130, 246, 0.3)' : 'rgba(15,23,42,0.6)',
+                            color: (item.etcType || 'jissha') === 'jissha' ? '#ffffff' : 'var(--text-muted)',
+                            fontWeight: 800,
+                            fontSize: '0.8rem',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          🚌 実車
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => updateItem(item.id, { etcType: 'kaiso' })}
+                          style={{
+                            padding: '6px 8px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: item.etcType === 'kaiso' ? '2px solid #f59e0b' : '1px solid var(--border-color)',
+                            background: item.etcType === 'kaiso' ? 'rgba(245, 158, 11, 0.3)' : 'rgba(15,23,42,0.6)',
+                            color: item.etcType === 'kaiso' ? '#ffffff' : 'var(--text-muted)',
+                            fontWeight: 800,
+                            fontSize: '0.8rem',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          🔄 回送
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 預り金から引く / 引かない ボタン */}
+                    <div>
+                      <div style={{ fontSize: '0.74rem', color: '#60a5fa', fontWeight: 800, marginBottom: 4 }}>
+                        👛 ガイド預り金精算
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                        <button
+                          type="button"
+                          onClick={() => updateItem(item.id, { etcPaidByGuide: false })}
+                          style={{
+                            padding: '6px 8px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: !item.etcPaidByGuide ? '2px solid #10b981' : '1px solid var(--border-color)',
+                            background: !item.etcPaidByGuide ? 'rgba(16, 185, 129, 0.25)' : 'rgba(15,23,42,0.6)',
+                            color: !item.etcPaidByGuide ? '#ffffff' : 'var(--text-muted)',
+                            fontWeight: 800,
+                            fontSize: '0.78rem',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          🏢 引かない (会社ETC)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => updateItem(item.id, { etcPaidByGuide: true })}
+                          style={{
+                            padding: '6px 8px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: item.etcPaidByGuide ? '2px solid #a855f7' : '1px solid var(--border-color)',
+                            background: item.etcPaidByGuide ? 'rgba(168, 85, 247, 0.3)' : 'rgba(15,23,42,0.6)',
+                            color: item.etcPaidByGuide ? '#ffffff' : 'var(--text-muted)',
+                            fontWeight: 800,
+                            fontSize: '0.78rem',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          👛 預り金から引く
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* インボイス番号の確認と検証ステータス */}
                 <div

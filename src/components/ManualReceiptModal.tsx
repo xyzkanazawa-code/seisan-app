@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Calendar, DollarSign, MapPin, Tag, CreditCard, AlertTriangle } from 'lucide-react';
+import { X, Plus, Calendar, DollarSign, MapPin, Tag, CreditCard, AlertTriangle, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { db, type Tour, type ExpenseCategory, type PaymentMethod, type Receipt } from '../db';
 import { extractInvoiceNumbers } from '../utils/invoiceValidator';
 import { learnFromReceipt } from '../utils/learningService';
@@ -20,6 +20,8 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
 }) => {
   const [category, setCategory] = useState<ExpenseCategory>('parking');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('advance');
+  const [etcType, setEtcType] = useState<'jissha' | 'kaiso'>('jissha');
+  const [etcPaidByGuide, setEtcPaidByGuide] = useState<boolean>(false);
   const [advanceRemaining, setAdvanceRemaining] = useState<number | null>(null);
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [amount, setAmount] = useState<number | ''>('');
@@ -39,6 +41,8 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
     setPlace('');
     setInvoiceNumber('');
     setMemo('');
+    setEtcType('jissha');
+    setEtcPaidByGuide(false);
     setDuplicates([]);
     db.receipts
       .where('tourId')
@@ -92,11 +96,16 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
 
   if (!isOpen) return null;
 
+  const isCurrentCategoryEtc = category === 'etc';
+  const hasExactImageDuplicate = duplicates.some(d => d.confidence === 'exact_image');
+  const hasNonEtcDuplicate = duplicates.some(d => !d.isEtc && (d.confidence === 'exact_image' || d.confidence === 'high' || d.confidence === 'medium'));
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!amount || Number(amount) <= 0 || !activeTour.id || isSaving) return;
 
-    if (duplicates.length > 0) {
+    // 二重登録の警告確認（ETC以外の重複、または同一画像のみ）
+    if (hasNonEtcDuplicate || hasExactImageDuplicate) {
       const top = duplicates[0];
       const msg = [
         '⚠️ 二重登録の可能性があります！',
@@ -151,14 +160,16 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
       const newReceipt: Omit<Receipt, 'id'> = {
         tourId: activeTour.id,
         category,
-        paymentMethod,
+        paymentMethod: category === 'etc' ? (paymentMethod === 'advance' || paymentMethod === 'cash' ? paymentMethod : 'company_etc') : paymentMethod,
         date,
         amount: Number(amount),
-        place: place.trim() || 'その他経費',
+        place: place.trim() || (category === 'etc' ? 'ETC高速料金' : 'その他経費'),
         invoiceNumber: formattedInvoice,
         isInvoiceValid,
         hasInvoiceHighlight: false,
         processedImageUrl: dummyImage,
+        etcType: category === 'etc' ? etcType : undefined,
+        etcPaidByGuide: category === 'etc' ? etcPaidByGuide : undefined,
         memo: memo.trim(),
         createdAt: Date.now()
       };
@@ -200,32 +211,54 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
 
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
+            {/* 二重登録お知らせ：ETCは控えめ、その他は目立つ */}
             {duplicates.length > 0 && (
-              <div
-                style={{
-                  padding: '12px 14px',
-                  borderRadius: 'var(--radius-sm)',
-                  background: 'rgba(245, 158, 11, 0.16)',
-                  border: '2px solid rgba(245, 158, 11, 0.65)',
-                  color: '#fef3c7',
-                  fontSize: '0.78rem',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 6
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, color: '#fbbf24', fontSize: '0.84rem' }}>
-                  <AlertTriangle size={16} color="#fbbf24" />
-                  <span>⚠️ 二重登録の可能性があります（類似明細 {duplicates.length}件）</span>
+              isCurrentCategoryEtc && !hasExactImageDuplicate && !hasNonEtcDuplicate ? (
+                /* ETCの控えめなお知らせ */
+                <div
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'rgba(59, 130, 246, 0.12)',
+                    border: '1px solid rgba(59, 130, 246, 0.3)',
+                    color: '#93c5fd',
+                    fontSize: '0.75rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6
+                  }}
+                >
+                  <AlertCircle size={14} color="#60a5fa" />
+                  <span>ℹ️ 同日の同一ETC区間の登録歴があります（※往復運行等は問題ありません）</span>
                 </div>
-                {duplicates.slice(0, 2).map((dup, i) => (
-                  <div key={i} style={{ color: '#fde68a', lineHeight: 1.4 }}>
-                    ・{dup.isSameTour ? '【現在のツアー】' : `【別ツアー ${dup.tourCode || ''}】`}{' '}
-                    {dup.existingReceipt.date} / <strong>{dup.existingReceipt.place}</strong> /{' '}
-                    ¥{dup.existingReceipt.amount.toLocaleString()}（{dup.reasons.join(' / ')}）
+              ) : (
+                /* ETC以外の目立つ警告アラート（今と同じ） */
+                <div
+                  style={{
+                    padding: '12px 14px',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'rgba(245, 158, 11, 0.16)',
+                    border: '2px solid rgba(245, 158, 11, 0.65)',
+                    color: '#fef3c7',
+                    fontSize: '0.78rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 6
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, color: '#fbbf24', fontSize: '0.84rem' }}>
+                    <AlertTriangle size={16} color="#fbbf24" />
+                    <span>⚠️ 二重登録の可能性があります（類似明細 {duplicates.length}件）</span>
                   </div>
-                ))}
-              </div>
+                  {duplicates.slice(0, 2).map((dup, i) => (
+                    <div key={i} style={{ color: '#fde68a', lineHeight: 1.4 }}>
+                      ・{dup.isSameTour ? '【現在のツアー】' : `【別ツアー ${dup.tourCode || ''}】`}{' '}
+                      {dup.existingReceipt.date} / <strong>{dup.existingReceipt.place}</strong> /{' '}
+                      ¥{dup.existingReceipt.amount.toLocaleString()}（{dup.reasons.join(' / ')}）
+                    </div>
+                  ))}
+                </div>
+              )
             )}
 
             <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 10 }}>
@@ -274,7 +307,7 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
               <input
                 type="text"
                 className="form-input"
-                placeholder="例: 日光東照宮前 観光バス駐車場"
+                placeholder={isCurrentCategoryEtc ? "例: ETC (東京IC → 日光IC)" : "例: 日光東照宮前 観光バス駐車場"}
                 value={place}
                 onChange={(e) => setPlace(e.target.value)}
                 required
@@ -283,25 +316,51 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
 
             {/* 科目クイック選択ボタン */}
             <div className="form-group">
-              <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Tag size={14} />
-                経費科目（タップで即選択）
+              <label className="form-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <Tag size={14} />
+                  経費科目（タップで即切替）
+                </span>
+                <span style={{ fontSize: '0.72rem', color: 'var(--primary)', fontWeight: 700 }}>
+                  選択中: {[
+                    { id: 'parking', label: '駐車場' },
+                    { id: 'etc', label: 'ETC' },
+                    { id: 'toll', label: '有料道' },
+                    { id: 'fuel', label: '燃料' },
+                    { id: 'breakfast', label: '朝食代' },
+                    { id: 'lunch', label: '昼食代' },
+                    { id: 'night_meal', label: '夜食代' },
+                    { id: 'tea', label: 'お茶代' },
+                    { id: 'water', label: 'ミネラル水' },
+                    { id: 'overtime', label: '残業代' },
+                    { id: 'taxi', label: 'タクシー' },
+                    { id: 'lodging', label: '宿泊' },
+                    { id: 'other', label: 'その他' }
+                  ].find((c) => c.id === category)?.label}
+                </span>
               </label>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(62px, 1fr))', gap: 4, marginBottom: 8 }}>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(62px, 1fr))',
+                  gap: 4,
+                  marginBottom: 8
+                }}
+              >
                 {[
-                  { id: 'parking' as const, label: '駐車場', icon: '🅿️', defaultPay: 'cash' as const },
-                  { id: 'etc' as const, label: 'ETC', icon: '🚗', defaultPay: 'company_etc' as const },
-                  { id: 'toll' as const, label: '有料道', icon: '🛣️', defaultPay: 'cash' as const },
-                  { id: 'fuel' as const, label: '燃料', icon: '⛽', defaultPay: 'company_fuel' as const },
-                  { id: 'breakfast' as const, label: '朝食代', icon: '🍙', defaultPay: 'cash' as const },
-                  { id: 'lunch' as const, label: '昼食代', icon: '🍱', defaultPay: 'cash' as const },
-                  { id: 'night_meal' as const, label: '夜食代', icon: '🌙', defaultPay: 'cash' as const },
-                  { id: 'tea' as const, label: 'お茶代', icon: '🍵', defaultPay: 'cash' as const },
-                  { id: 'water' as const, label: 'ミネラル水', icon: '💧', defaultPay: 'cash' as const },
-                  { id: 'overtime' as const, label: '残業代', icon: '⏰', defaultPay: 'cash' as const },
-                  { id: 'taxi' as const, label: 'タクシー', icon: '🚕', defaultPay: 'cash' as const },
-                  { id: 'lodging' as const, label: '宿泊', icon: '🏨', defaultPay: 'cash' as const },
-                  { id: 'other' as const, label: 'その他', icon: '📦', defaultPay: 'cash' as const },
+                  { id: 'parking', label: '駐車場', icon: '🅿️' },
+                  { id: 'etc', label: 'ETC', icon: '🚗' },
+                  { id: 'toll', label: '有料道', icon: '🛣️' },
+                  { id: 'fuel', label: '燃料', icon: '⛽' },
+                  { id: 'breakfast', label: '朝食代', icon: '🍙' },
+                  { id: 'lunch', label: '昼食代', icon: '🍱' },
+                  { id: 'night_meal', label: '夜食代', icon: '🌙' },
+                  { id: 'tea', label: 'お茶代', icon: '🍵' },
+                  { id: 'water', label: 'ミネラル水', icon: '💧' },
+                  { id: 'overtime', label: '残業代', icon: '⏰' },
+                  { id: 'taxi', label: 'タクシー', icon: '🚕' },
+                  { id: 'lodging', label: '宿泊', icon: '🏨' },
+                  { id: 'other', label: 'その他', icon: '📦' }
                 ].map((cat) => {
                   const isSelected = category === cat.id;
                   return (
@@ -309,14 +368,13 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
                       key={cat.id}
                       type="button"
                       onClick={() => {
-                        setCategory(cat.id);
-                        if (!isSelected && cat.id === 'etc') {
+                        setCategory(cat.id as ExpenseCategory);
+                        if (cat.id === 'etc') {
                           setPaymentMethod('company_etc');
-                        } else if (!isSelected && cat.id === 'fuel') {
+                        } else if (cat.id === 'fuel') {
                           setPaymentMethod('company_fuel');
-                        } else if (!isSelected && cat.id !== 'etc' && cat.id !== 'fuel') {
-                          // 前払金が残っていればadvance、残高がなければcash（個人立替）に自動設定
-                          setPaymentMethod(advanceRemaining !== null && advanceRemaining <= 0 ? 'cash' : 'advance');
+                        } else {
+                          setPaymentMethod(advanceRemaining !== null && advanceRemaining > 0 ? 'advance' : 'cash');
                         }
                       }}
                       style={{
@@ -344,6 +402,124 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
                 })}
               </div>
             </div>
+
+            {/* ETC詳細（ETC選択時）: 実車/回送 ＆ 預り金から引く/引かない */}
+            {isCurrentCategoryEtc && (
+              <div
+                style={{
+                  padding: 12,
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'rgba(59, 130, 246, 0.08)',
+                  border: '1px solid rgba(59, 130, 246, 0.25)',
+                  marginBottom: 12,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10
+                }}
+              >
+                {/* 回送 / 実車 ボタン */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.74rem', color: '#60a5fa', fontWeight: 800, marginBottom: 6 }}>
+                    🚗 ETC運行分類（実車 / 回送）
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => setEtcType('jissha')}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: etcType === 'jissha' ? '2px solid #3b82f6' : '1px solid var(--border-color)',
+                        background: etcType === 'jissha' ? 'rgba(59, 130, 246, 0.3)' : 'rgba(15,23,42,0.6)',
+                        color: etcType === 'jissha' ? '#ffffff' : 'var(--text-muted)',
+                        fontWeight: 800,
+                        fontSize: '0.82rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 4
+                      }}
+                    >
+                      <span>🚌 実車</span>
+                      {etcType === 'jissha' && <CheckCircle2 size={14} />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEtcType('kaiso')}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: etcType === 'kaiso' ? '2px solid #f59e0b' : '1px solid var(--border-color)',
+                        background: etcType === 'kaiso' ? 'rgba(245, 158, 11, 0.3)' : 'rgba(15,23,42,0.6)',
+                        color: etcType === 'kaiso' ? '#ffffff' : 'var(--text-muted)',
+                        fontWeight: 800,
+                        fontSize: '0.82rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 4
+                      }}
+                    >
+                      <span>🔄 回送</span>
+                      {etcType === 'kaiso' && <CheckCircle2 size={14} />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 預り金から引く / 引かない ボタン */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.74rem', color: '#60a5fa', fontWeight: 800, marginBottom: 6 }}>
+                    👛 ガイド預り金精算（引く / 引かない）
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => setEtcPaidByGuide(false)}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: !etcPaidByGuide ? '2px solid #10b981' : '1px solid var(--border-color)',
+                        background: !etcPaidByGuide ? 'rgba(16, 185, 129, 0.25)' : 'rgba(15,23,42,0.6)',
+                        color: !etcPaidByGuide ? '#ffffff' : 'var(--text-muted)',
+                        fontWeight: 800,
+                        fontSize: '0.8rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 4
+                      }}
+                    >
+                      <span>🏢 引かない (会社ETC)</span>
+                      {!etcPaidByGuide && <CheckCircle2 size={14} />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEtcPaidByGuide(true)}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: etcPaidByGuide ? '2px solid #a855f7' : '1px solid var(--border-color)',
+                        background: etcPaidByGuide ? 'rgba(168, 85, 247, 0.3)' : 'rgba(15,23,42,0.6)',
+                        color: etcPaidByGuide ? '#ffffff' : 'var(--text-muted)',
+                        fontWeight: 800,
+                        fontSize: '0.8rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 4
+                      }}
+                    >
+                      <span>👛 預り金から引く</span>
+                      {etcPaidByGuide && <CheckCircle2 size={14} />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
               <div className="form-group">

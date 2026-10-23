@@ -252,6 +252,43 @@ export async function sliceEtcReceipt(
 }
 
 /**
+ * 縦の比率配列（または均等分割）に基づいて画像を縦方向にスライス分割する
+ */
+export async function sliceImageVerticalSegments(
+  imageSrc: string,
+  segments: { topPct: number; bottomPct: number }[]
+): Promise<string[]> {
+  if (!segments || segments.length <= 1) return [imageSrc];
+
+  try {
+    const img = await loadImage(imageSrc);
+    const origW = img.width;
+    const origH = img.height;
+    const results: string[] = [];
+
+    for (const seg of segments) {
+      const topY = Math.max(0, Math.min(origH - 10, Math.round(origH * Math.max(0, seg.topPct))));
+      const bottomY = Math.min(origH, Math.max(topY + 10, Math.round(origH * Math.min(1, seg.bottomPct))));
+      const segH = bottomY - topY;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = origW;
+      canvas.height = segH;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) continue;
+
+      ctx.drawImage(img, 0, topY, origW, segH, 0, 0, origW, segH);
+      results.push(canvas.toDataURL('image/jpeg', 0.88));
+    }
+
+    return results.length > 0 ? results : [imageSrc];
+  } catch (err) {
+    console.warn('画像縦分割エラー:', err);
+    return [imageSrc];
+  }
+}
+
+/**
  * 複数枚一括撮影時の画像から、レシート候補枠を検出して個別に切り抜く
  * （白または明るい矩形領域のセグメンテーション＆輪郭オートクロップ）
  * - 複数枚並べて撮影した場合は、それぞれのレシート画像配列を返す

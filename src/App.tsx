@@ -282,6 +282,9 @@ export function App() {
     receiptImage: string;
     invoiceNumber?: string;
     memo?: string;
+    etcType?: 'jissha' | 'kaiso';
+    etcPaidByGuide?: boolean;
+    etcDetails?: any;
   }) => {
     // 紐付けるツアーを特定（selectedTour または activeTour があればそれを使用、なければ自動作成）
     let targetTourId = selectedTour?.id || activeTour?.id;
@@ -296,7 +299,7 @@ export function App() {
         advancePayment: 0,
         driverName: appConfig?.name || profile?.driverName || 'マサ',
         vehicleNumber: profile?.vehicleNumber || '担当車両',
-        memo: 'Gemini 1.5 Flash レシートOCRにより自動生成',
+        memo: 'Gemini Flash レシートOCRにより自動生成',
         createdAt: Date.now(),
         updatedAt: Date.now()
       };
@@ -327,6 +330,9 @@ export function App() {
       originalImageUrl: receiptData.receiptImage,
       processedImageUrl: receiptData.receiptImage,
       imageHash,
+      etcType: mappedCategory === 'etc' ? (receiptData.etcType || 'jissha') : undefined,
+      etcPaidByGuide: mappedCategory === 'etc' ? Boolean(receiptData.etcPaidByGuide) : undefined,
+      etcDetails: receiptData.etcDetails,
       memo: receiptData.memo || undefined, // 📝 手打ちで入力した備考
       aiMemo: itemsMemo || undefined,     // 🤖 AIが読み取った品目（別項目）
       createdAt: Date.now()

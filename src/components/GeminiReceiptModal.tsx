@@ -17,12 +17,13 @@ import {
   ChevronUp
 } from 'lucide-react';
 import {
-  analyzeReceiptWithGemini,
+  analyzeReceiptsWithGemini,
   fileToDataUrl,
   mapAiCategoryToExpenseCategory,
   type GeminiReceiptResult,
   type GeminiReceiptItem
 } from '../utils/geminiOcrService';
+import { sliceImageVerticalSegments } from '../utils/imageProcessor';
 import { getAppConfig } from '../utils/configStorage';
 import { checkReceiptDuplicates, type DuplicateMatch } from '../utils/duplicateChecker';
 import type { Tour } from '../db';
@@ -42,6 +43,9 @@ interface GeminiReceiptModalProps {
     receiptImage: string;
     invoiceNumber?: string;
     memo?: string;
+    etcType?: 'jissha' | 'kaiso';
+    etcPaidByGuide?: boolean;
+    etcDetails?: any;
   }) => Promise<void>;
 }
 
@@ -57,14 +61,19 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
-  // 解析結果ステート
-  const [result, setResult] = useState<GeminiReceiptResult | null>(null);
+  // 解析結果ステート（複数件対応）
+  const [resultsList, setResultsList] = useState<{ result: GeminiReceiptResult; image: string }[]>([]);
+  const [activeIndex, setActiveIndex] = useState(0);
+
   const [editDate, setEditDate] = useState('');
   const [editShopName, setEditShopName] = useState('');
   const [editTotalAmount, setEditTotalAmount] = useState<number>(0);
   const [editItems, setEditItems] = useState<GeminiReceiptItem[]>([]);
   const [editCategory, setEditCategory] = useState('食費');
   const [editMemo, setEditMemo] = useState('');
+  const [etcType, setEtcType] = useState<'jissha' | 'kaiso'>('jissha');
+  const [etcPaidByGuide, setEtcPaidByGuide] = useState<boolean>(false);
+
   const [showJsonView, setShowJsonView] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -73,16 +82,19 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
-  // モーダルが閉じた時に状態を初期化（前回のレシート誤再登録を防止）
+  // モーダルが閉じた時に状態を初期化
   useEffect(() => {
     if (!isOpen) {
       setSelectedImage(null);
-      setResult(null);
+      setResultsList([]);
+      setActiveIndex(0);
       setEditDate('');
       setEditShopName('');
       setEditTotalAmount(0);
       setEditItems([]);
       setEditMemo('');
+      setEtcType('jissha');
+      setEtcPaidByGuide(false);
       setDuplicates([]);
       setAnalysisError(null);
       setSaveSuccess(false);
@@ -90,9 +102,25 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
     }
   }, [isOpen]);
 
+  const currentEntry = resultsList[activeIndex] || null;
+  const currentResult = currentEntry?.result || null;
+  const currentImage = currentEntry?.image || selectedImage;
+
+  // アクティブなインデックスが切り替わった時にフォームに反映
+  const syncFormWithEntry = (entry: { result: GeminiReceiptResult; image: string }) => {
+    const data = entry.result;
+    setEditDate(data.date);
+    setEditShopName(data.shopName);
+    setEditTotalAmount(data.totalAmount);
+    setEditItems(data.items);
+    if (data.category) setEditCategory(data.category);
+    setEtcType(data.etcType || 'jissha');
+    setEtcPaidByGuide(false);
+  };
+
   // 入力値・解析結果が変わるたびに二重登録チェックを実行
   useEffect(() => {
-    if (!isOpen || !result || isAnalyzing) {
+    if (!isOpen || !currentResult || isAnalyzing) {
       setDuplicates([]);
       return;
     }
@@ -104,8 +132,8 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
       amount: Number(editTotalAmount) || 0,
       place: editShopName,
       category: mapAiCategoryToExpenseCategory(editCategory),
-      invoiceNumber: result.invoiceNumber,
-      imageUrl: selectedImage || undefined
+      invoiceNumber: currentResult.invoiceNumber,
+      imageUrl: currentImage || undefined
     }).then((found) => {
       if (!cancelled) {
         setDuplicates(found);
@@ -115,7 +143,7 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, result, isAnalyzing, editDate, editTotalAmount, editShopName, editCategory, selectedImage, activeTour?.id]);
+  }, [isOpen, currentResult, isAnalyzing, editDate, editTotalAmount, editShopName, editCategory, currentImage, activeTour?.id]);
 
   if (!isOpen) return null;
 
@@ -139,18 +167,39 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
     }
   };
 
-  // Gemini 1.5 Flash 解析実行
+  // Gemini 解析実行（縦連続ETC明細を自動分離）
   const runGeminiAnalysis = async (imageDataUrl: string) => {
     setIsAnalyzing(true);
     setAnalysisError(null);
     try {
-      const data = await analyzeReceiptWithGemini(imageDataUrl);
-      setResult(data);
-      setEditDate(data.date);
-      setEditShopName(data.shopName);
-      setEditTotalAmount(data.totalAmount);
-      setEditItems(data.items);
-      if (data.category) setEditCategory(data.category);
+      const dataList = await analyzeReceiptsWithGemini(imageDataUrl);
+
+      // 複数件ある場合は画像を縦スライス
+      let sliceImages: string[] = [imageDataUrl];
+      if (dataList.length > 1) {
+        const segs = dataList.map((r, segIdx) => {
+          if (r.splitBox && typeof r.splitBox.topPct === 'number' && typeof r.splitBox.bottomPct === 'number') {
+            return r.splitBox;
+          }
+          const segSize = 1 / dataList.length;
+          return {
+            topPct: segIdx * segSize,
+            bottomPct: (segIdx + 1) * segSize
+          };
+        });
+        sliceImages = await sliceImageVerticalSegments(imageDataUrl, segs);
+      }
+
+      const list = dataList.map((d, i) => ({
+        result: d,
+        image: sliceImages[i] || imageDataUrl
+      }));
+
+      setResultsList(list);
+      setActiveIndex(0);
+      if (list.length > 0) {
+        syncFormWithEntry(list[0]);
+      }
     } catch (err: any) {
       console.error('Gemini OCR 解析エラー:', err);
       setAnalysisError(err?.message || 'レシートの解析に失敗しました。');
@@ -174,7 +223,6 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
     }
     setEditItems(updated);
 
-    // 品目の合計で合計金額を連動再計算（オプション）
     const newTotal = updated.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
     if (newTotal > 0) {
       setEditTotalAmount(newTotal);
@@ -187,12 +235,17 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
     setEditItems(updated);
   };
 
-  // 家計簿データへの登録
-  const handleSave = async () => {
-    if (!selectedImage || isSaving || saveSuccess) return;
+  const isCurrentCategoryEtc = mapAiCategoryToExpenseCategory(editCategory) === 'etc';
+  // ETCのみの重複か、それ以外の目立つ重複かを判定
+  const hasExactImageDuplicate = duplicates.some(d => d.confidence === 'exact_image');
+  const hasNonEtcDuplicate = duplicates.some(d => !d.isEtc && (d.confidence === 'exact_image' || d.confidence === 'high' || d.confidence === 'medium'));
 
-    // 二重登録の可能性がある場合は確認ダイアログを表示
-    if (duplicates.length > 0) {
+  // 現在の1件を登録
+  const handleSaveCurrent = async () => {
+    if (!currentImage || isSaving || saveSuccess) return;
+
+    // 二重登録の警告確認（ETC以外の重複、または完全同一画像の場合のみ確認）
+    if (hasNonEtcDuplicate || hasExactImageDuplicate) {
       const topMatch = duplicates[0];
       const msg = [
         '⚠️ 二重登録の可能性があります！',
@@ -220,16 +273,76 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
         amount: Number(editTotalAmount) || 0,
         category: editCategory,
         items: editItems,
-        receiptImage: selectedImage,
-        invoiceNumber: result?.invoiceNumber,
-        memo: editMemo.trim()
+        receiptImage: currentImage,
+        invoiceNumber: currentResult?.invoiceNumber,
+        memo: editMemo.trim(),
+        etcType: isCurrentCategoryEtc ? etcType : undefined,
+        etcPaidByGuide: isCurrentCategoryEtc ? etcPaidByGuide : undefined,
+        etcDetails: isCurrentCategoryEtc ? {
+          entryGate: currentResult?.entryGate,
+          exitGate: currentResult?.exitGate,
+          splitIndex: resultsList.length > 1 ? activeIndex + 1 : undefined
+        } : undefined
       });
+
+      // 複数件ある場合、まだ未登録の次の明細へ進むか完了
+      if (resultsList.length > 1 && activeIndex < resultsList.length - 1) {
+        const nextIdx = activeIndex + 1;
+        setActiveIndex(nextIdx);
+        syncFormWithEntry(resultsList[nextIdx]);
+        setIsSaving(false);
+      } else {
+        setSaveSuccess(true);
+        setTimeout(() => {
+          onClose();
+        }, 800);
+      }
+    } catch (err: any) {
+      setAnalysisError(err?.message || '運行経費データへの保存に失敗しました。');
+      setIsSaving(false);
+    }
+  };
+
+  // 全て一括登録（複数件分離された場合）
+  const handleSaveAll = async () => {
+    if (resultsList.length === 0 || isSaving) return;
+
+    if (hasNonEtcDuplicate || hasExactImageDuplicate) {
+      if (!window.confirm('⚠️ 二重登録の疑いがある明細が含まれています。すべて保存してもよろしいですか？')) {
+        return;
+      }
+    }
+
+    setIsSaving(true);
+    try {
+      for (let i = 0; i < resultsList.length; i++) {
+        const item = resultsList[i];
+        const res = item.result;
+        const isEtc = mapAiCategoryToExpenseCategory(res.category) === 'etc';
+
+        await onSaveToExpense({
+          shopName: res.shopName,
+          date: res.date,
+          amount: res.totalAmount,
+          category: res.category || 'ETC',
+          items: res.items,
+          receiptImage: item.image,
+          invoiceNumber: res.invoiceNumber,
+          etcType: isEtc ? (res.etcType || 'jissha') : undefined,
+          etcPaidByGuide: false,
+          etcDetails: isEtc ? {
+            entryGate: res.entryGate,
+            exitGate: res.exitGate,
+            splitIndex: i + 1
+          } : undefined
+        });
+      }
       setSaveSuccess(true);
       setTimeout(() => {
         onClose();
-      }, 1000);
+      }, 900);
     } catch (err: any) {
-      setAnalysisError(err?.message || '家計簿データへの保存に失敗しました。');
+      setAnalysisError(err?.message || '一括保存に失敗しました。');
     } finally {
       setIsSaving(false);
     }
@@ -670,79 +783,164 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
           )}
 
           {/* 解析結果表示＆編集フォーム */}
-          {result && !isAnalyzing && (
+          {currentResult && !isAnalyzing && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {/* ⚠️ 二重登録（重複レシート）検知アラート */}
-              {duplicates.length > 0 && (
+              {/* 複数件分離された場合のナビゲーションセレクター */}
+              {resultsList.length > 1 && (
                 <div
                   style={{
-                    padding: '14px 16px',
+                    padding: '12px 14px',
                     borderRadius: '16px',
-                    background: 'rgba(245, 158, 11, 0.16)',
-                    border: '2px solid rgba(245, 158, 11, 0.65)',
-                    color: '#fef3c7',
+                    background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(168, 85, 247, 0.2))',
+                    border: '1.5px solid rgba(168, 85, 247, 0.45)',
                     display: 'flex',
                     flexDirection: 'column',
-                    gap: '10px',
-                    boxShadow: '0 4px 18px rgba(245, 158, 11, 0.2)'
+                    gap: '8px'
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 800, fontSize: '0.9rem', color: '#fbbf24' }}>
-                    <AlertTriangle size={20} color="#fbbf24" style={{ flexShrink: 0 }} />
-                    <span>⚠️ 二重登録の可能性があります！（類似明細 {duplicates.length}件）</span>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#f5d0fe', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Sparkles size={16} color="#f0abfc" />
+                      <span>ETCレシート {resultsList.length} 件を1枚ずつ自動分離しました！</span>
+                    </div>
+                    <span style={{ fontSize: '0.74rem', color: '#c084fc', fontWeight: 700 }}>
+                      {activeIndex + 1} / {resultsList.length} 件目
+                    </span>
                   </div>
-                  <div style={{ fontSize: '0.78rem', color: '#fde68a', lineHeight: 1.45 }}>
-                    すでに同じ日付・金額・店舗（または同一画像）のレシートが登録されています。二重登録でないかご確認ください。
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    {duplicates.slice(0, 2).map((dup, idx) => (
-                      <div
+
+                  <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '2px' }}>
+                    {resultsList.map((entry, idx) => (
+                      <button
                         key={idx}
+                        type="button"
+                        onClick={() => {
+                          setActiveIndex(idx);
+                          syncFormWithEntry(entry);
+                        }}
                         style={{
+                          padding: '6px 10px',
+                          borderRadius: '10px',
+                          border: activeIndex === idx ? '2px solid #c084fc' : '1px solid rgba(255, 255, 255, 0.12)',
+                          background: activeIndex === idx ? 'rgba(168, 85, 247, 0.45)' : 'rgba(15, 23, 42, 0.65)',
+                          color: activeIndex === idx ? '#ffffff' : '#94a3b8',
+                          fontSize: '0.74rem',
+                          fontWeight: activeIndex === idx ? 800 : 600,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
                           display: 'flex',
                           alignItems: 'center',
-                          gap: '10px',
-                          padding: '8px 10px',
-                          borderRadius: '10px',
-                          background: 'rgba(15, 23, 42, 0.75)',
-                          border: '1px solid rgba(251, 191, 36, 0.35)',
-                          fontSize: '0.76rem'
+                          gap: 5
                         }}
                       >
-                        {(dup.existingReceipt.processedImageUrl || dup.existingReceipt.originalImageUrl) && (
-                          <img
-                            src={dup.existingReceipt.processedImageUrl || dup.existingReceipt.originalImageUrl}
-                            alt="既登録レシート"
-                            style={{
-                              width: '38px',
-                              height: '44px',
-                              objectFit: 'cover',
-                              borderRadius: '6px',
-                              border: '1px solid rgba(255,255,255,0.2)',
-                              flexShrink: 0
-                            }}
-                          />
-                        )}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, color: '#ffffff' }}>
-                            <span>{dup.existingReceipt.date}</span>
-                            <span>・</span>
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {dup.existingReceipt.place}
-                            </span>
-                            <span style={{ marginLeft: 'auto', color: '#fbbf24', fontFamily: 'var(--font-num)' }}>
-                              ¥{dup.existingReceipt.amount.toLocaleString()}
-                            </span>
-                          </div>
-                          <div style={{ fontSize: '0.7rem', color: '#cbd5e1', marginTop: '2px' }}>
-                            {dup.isSameTour ? '【現在のツアー内で登録済】' : `【別ツアー ${dup.tourCode || ''} で登録済】`}{' '}
-                            {dup.reasons.join(' / ')}
-                          </div>
-                        </div>
-                      </div>
+                        <span>{idx + 1}.</span>
+                        <span style={{ maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {entry.result.shopName}
+                        </span>
+                        <span style={{ color: activeIndex === idx ? '#fef08a' : '#cbd5e1' }}>
+                          ¥{entry.result.totalAmount.toLocaleString()}
+                        </span>
+                      </button>
                     ))}
                   </div>
                 </div>
+              )}
+
+              {/* ⚠️ 二重登録検知アラート：ETCは控えめ、その他は目立つ */}
+              {duplicates.length > 0 && (
+                isCurrentCategoryEtc && !hasExactImageDuplicate && !hasNonEtcDuplicate ? (
+                  /* ETCの控えめなお知らせ */
+                  <div
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: '12px',
+                      background: 'rgba(59, 130, 246, 0.12)',
+                      border: '1px solid rgba(59, 130, 246, 0.3)',
+                      color: '#bfdbfe',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      fontSize: '0.76rem'
+                    }}
+                  >
+                    <AlertCircle size={16} color="#60a5fa" style={{ flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ fontWeight: 700, color: '#93c5fd' }}>同区間の利用履歴あり:</span>{' '}
+                      <span>{duplicates[0].reasons[0] || '同日の同一ETC区間'}</span>
+                      <span style={{ color: '#94a3b8', marginLeft: 6 }}>（※往復運行等は問題ありません）</span>
+                    </div>
+                  </div>
+                ) : (
+                  /* ETC以外の目立つ警告アラート（今と同じ） */
+                  <div
+                    style={{
+                      padding: '14px 16px',
+                      borderRadius: '16px',
+                      background: 'rgba(245, 158, 11, 0.16)',
+                      border: '2px solid rgba(245, 158, 11, 0.65)',
+                      color: '#fef3c7',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '10px',
+                      boxShadow: '0 4px 18px rgba(245, 158, 11, 0.2)'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 800, fontSize: '0.9rem', color: '#fbbf24' }}>
+                      <AlertTriangle size={20} color="#fbbf24" style={{ flexShrink: 0 }} />
+                      <span>⚠️ 二重登録の可能性があります！（類似明細 {duplicates.length}件）</span>
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: '#fde68a', lineHeight: 1.45 }}>
+                      すでに同じ日付・金額・店舗（または同一画像）のレシートが登録されています。二重登録でないかご確認ください。
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {duplicates.slice(0, 2).map((dup, idx) => (
+                        <div
+                          key={idx}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '8px 10px',
+                            borderRadius: '10px',
+                            background: 'rgba(15, 23, 42, 0.75)',
+                            border: '1px solid rgba(251, 191, 36, 0.35)',
+                            fontSize: '0.76rem'
+                          }}
+                        >
+                          {(dup.existingReceipt.processedImageUrl || dup.existingReceipt.originalImageUrl) && (
+                            <img
+                              src={dup.existingReceipt.processedImageUrl || dup.existingReceipt.originalImageUrl}
+                              alt="既登録レシート"
+                              style={{
+                                width: '38px',
+                                height: '44px',
+                                objectFit: 'cover',
+                                borderRadius: '6px',
+                                border: '1px solid rgba(255,255,255,0.2)',
+                                flexShrink: 0
+                              }}
+                            />
+                          )}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, color: '#ffffff' }}>
+                              <span>{dup.existingReceipt.date}</span>
+                              <span>・</span>
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {dup.existingReceipt.place}
+                              </span>
+                              <span style={{ marginLeft: 'auto', color: '#fbbf24', fontFamily: 'var(--font-num)' }}>
+                                ¥{dup.existingReceipt.amount.toLocaleString()}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: '0.7rem', color: '#cbd5e1', marginTop: '2px' }}>
+                              {dup.isSameTour ? '【現在のツアー内で登録済】' : `【別ツアー ${dup.tourCode || ''} で登録済】`}{' '}
+                              {dup.reasons.join(' / ')}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
               )}
 
               {/* サマリーカード */}
@@ -771,6 +969,125 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                   </div>
                 </div>
               </div>
+
+              {/* ETCの場合のボタン設置: 実車/回送 ＆ 預り金から引く/引かない */}
+              {isCurrentCategoryEtc && (
+                <div
+                  style={{
+                    padding: '14px',
+                    borderRadius: '16px',
+                    background: 'rgba(30, 41, 59, 0.7)',
+                    border: '1.5px solid rgba(59, 130, 246, 0.35)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px'
+                  }}
+                >
+                  {/* 回送 / 実車 ボタン */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 800, color: '#93c5fd', marginBottom: 6 }}>
+                      ETC 運行分類（実車 / 回送）
+                    </label>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setEtcType('jissha')}
+                        style={{
+                          padding: '10px',
+                          borderRadius: '12px',
+                          border: etcType === 'jissha' ? '2px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.15)',
+                          background: etcType === 'jissha' ? 'linear-gradient(135deg, #2563eb, #1d4ed8)' : 'rgba(15, 23, 42, 0.7)',
+                          color: '#ffffff',
+                          fontWeight: 800,
+                          fontSize: '0.85rem',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 6
+                        }}
+                      >
+                        <span>🚌 実車</span>
+                        {etcType === 'jissha' && <CheckCircle2 size={15} />}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setEtcType('kaiso')}
+                        style={{
+                          padding: '10px',
+                          borderRadius: '12px',
+                          border: etcType === 'kaiso' ? '2px solid #f59e0b' : '1px solid rgba(255, 255, 255, 0.15)',
+                          background: etcType === 'kaiso' ? 'linear-gradient(135deg, #d97706, #b45309)' : 'rgba(15, 23, 42, 0.7)',
+                          color: '#ffffff',
+                          fontWeight: 800,
+                          fontSize: '0.85rem',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 6
+                        }}
+                      >
+                        <span>🔄 回送</span>
+                        {etcType === 'kaiso' && <CheckCircle2 size={15} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 預り金から引く / 引かない ボタン */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 800, color: '#93c5fd', marginBottom: 6 }}>
+                      ETC 精算区分（ガイドの預り金から引くか）
+                    </label>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setEtcPaidByGuide(false)}
+                        style={{
+                          padding: '10px',
+                          borderRadius: '12px',
+                          border: !etcPaidByGuide ? '2px solid #10b981' : '1px solid rgba(255, 255, 255, 0.15)',
+                          background: !etcPaidByGuide ? 'linear-gradient(135deg, #059669, #047857)' : 'rgba(15, 23, 42, 0.7)',
+                          color: '#ffffff',
+                          fontWeight: 800,
+                          fontSize: '0.82rem',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 6
+                        }}
+                      >
+                        <span>🏢 引かない (会社ETC)</span>
+                        {!etcPaidByGuide && <CheckCircle2 size={15} />}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setEtcPaidByGuide(true)}
+                        style={{
+                          padding: '10px',
+                          borderRadius: '12px',
+                          border: etcPaidByGuide ? '2px solid #a855f7' : '1px solid rgba(255, 255, 255, 0.15)',
+                          background: etcPaidByGuide ? 'linear-gradient(135deg, #7c3aed, #6d28d9)' : 'rgba(15, 23, 42, 0.7)',
+                          color: '#ffffff',
+                          fontWeight: 800,
+                          fontSize: '0.82rem',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 6
+                        }}
+                      >
+                        <span>👛 預り金から引く</span>
+                        {etcPaidByGuide && <CheckCircle2 size={15} />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* 店名 & 日付 */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
@@ -1058,7 +1375,7 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <FileCode size={14} color="#818cf8" />
-                    <span>Gemini 返却 JSON データ ({result.rawJson?.length || 0}文字)</span>
+                    <span>Gemini 返却 JSON データ ({currentResult?.rawJson?.length || 0}文字)</span>
                   </div>
                   {showJsonView ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </button>
@@ -1078,36 +1395,70 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                         maxHeight: '140px'
                       }}
                     >
-                      {result.rawJson}
+                      {currentResult?.rawJson}
                     </pre>
                   </div>
                 )}
               </div>
 
-              {/* 登録確定ボタン */}
-              <button
-                type="button"
-                disabled={isSaving}
-                onClick={handleSave}
-                style={{
-                  padding: '14px',
-                  borderRadius: '16px',
-                  background: 'linear-gradient(135deg, #10b981, #059669)',
-                  border: 'none',
-                  color: '#ffffff',
-                  fontSize: '0.95rem',
-                  fontWeight: 800,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  boxShadow: '0 4px 15px rgba(16, 185, 129, 0.35)'
-                }}
-              >
-                <CheckCircle2 size={18} />
-                <span>{isSaving ? '保存中...' : '運行経費に登録する'}</span>
-              </button>
+              {/* 登録確定ボタン群 */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={handleSaveCurrent}
+                  style={{
+                    padding: '14px',
+                    borderRadius: '16px',
+                    background: 'linear-gradient(135deg, #10b981, #059669)',
+                    border: 'none',
+                    color: '#ffffff',
+                    fontSize: '0.95rem',
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    boxShadow: '0 4px 15px rgba(16, 185, 129, 0.35)'
+                  }}
+                >
+                  <CheckCircle2 size={18} />
+                  <span>
+                    {isSaving
+                      ? '保存中...'
+                      : resultsList.length > 1
+                      ? `この明細を登録して次へ (${activeIndex + 1}/${resultsList.length})`
+                      : '運行経費に登録する'}
+                  </span>
+                </button>
+
+                {resultsList.length > 1 && (
+                  <button
+                    type="button"
+                    disabled={isSaving}
+                    onClick={handleSaveAll}
+                    style={{
+                      padding: '12px',
+                      borderRadius: '14px',
+                      background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+                      border: 'none',
+                      color: '#ffffff',
+                      fontSize: '0.88rem',
+                      fontWeight: 800,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                      boxShadow: '0 4px 14px rgba(99, 102, 241, 0.3)'
+                    }}
+                  >
+                    <Sparkles size={16} color="#fef08a" />
+                    <span>全 {resultsList.length} 件の明細を一括登録する</span>
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>

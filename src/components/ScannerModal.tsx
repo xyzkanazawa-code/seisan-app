@@ -16,12 +16,12 @@ import {
 } from 'lucide-react';
 import { analyzeReceiptImage, type ParsedReceiptItem } from '../utils/ocrService';
 import {
-  analyzeReceiptWithGemini,
+  analyzeReceiptsWithGemini,
   mapAiCategoryToExpenseCategory,
   mapAiPaymentMethodToPaymentMethod
 } from '../utils/geminiOcrService';
 import { getAppConfig } from '../utils/configStorage';
-import { applyInvoiceHighlight, cropReceiptRegions } from '../utils/imageProcessor';
+import { applyInvoiceHighlight, cropReceiptRegions, sliceImageVerticalSegments } from '../utils/imageProcessor';
 import { extractInvoiceNumbers } from '../utils/invoiceValidator';
 import { getLearningStats } from '../utils/learningService';
 import { sortReceiptsByDate } from '../utils/receiptSort';
@@ -236,31 +236,59 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
 
       // Gemini AI が有効な場合
       if (useGemini) {
-        setProcessingStatus(`[${i + 1}/${croppedImages.length}] ✨ Gemini 1.5 Flashで高精度AI解析中...`);
+        setProcessingStatus(`[${i + 1}/${croppedImages.length}] ✨ Gemini Flashで高精度AI解析中（ETC連続明細自動分離）...`);
         try {
-          const geminiResult = await analyzeReceiptWithGemini(img);
-          const detectedCategory = mapAiCategoryToExpenseCategory(geminiResult.category);
-          const detectedPayment = mapAiPaymentMethodToPaymentMethod(geminiResult.paymentMethod, detectedCategory);
+          const geminiResults = await analyzeReceiptsWithGemini(img);
 
-          const invoiceNum = geminiResult.invoiceNumber?.trim() || undefined;
-          const validatedInvoice = invoiceNum ? extractInvoiceNumbers(invoiceNum) : [];
-          const primaryInvoice = validatedInvoice.length > 0 ? validatedInvoice[0] : undefined;
-          const highlightedImg = primaryInvoice ? await applyInvoiceHighlight(img) : img;
+          // 縦連続明細（複数件）の場合、画像を分割スライス
+          let sliceImages: string[] = [img];
+          if (geminiResults.length > 1) {
+            const segs = geminiResults.map((r, segIdx) => {
+              if (r.splitBox && typeof r.splitBox.topPct === 'number' && typeof r.splitBox.bottomPct === 'number') {
+                return r.splitBox;
+              }
+              const segSize = 1 / geminiResults.length;
+              return {
+                topPct: segIdx * segSize,
+                bottomPct: (segIdx + 1) * segSize
+              };
+            });
+            sliceImages = await sliceImageVerticalSegments(img, segs);
+          }
 
-          allParsedItems.push({
-            id: `gemini-${Date.now()}-${i}`,
-            category: detectedCategory,
-            paymentMethod: detectedPayment,
-            date: geminiResult.date,
-            amount: geminiResult.totalAmount,
-            place: geminiResult.shopName,
-            invoiceNumber: primaryInvoice?.normalizedNumber || invoiceNum,
-            isInvoiceValid: primaryInvoice?.isCheckDigitValid,
-            hasInvoiceHighlight: !!primaryInvoice,
-            originalImageUrl: img,
-            processedImageUrl: highlightedImg,
-            rawText: geminiResult.rawJson || ''
-          });
+          for (let k = 0; k < geminiResults.length; k++) {
+            const geminiResult = geminiResults[k];
+            const pieceImage = sliceImages[k] || img;
+            const detectedCategory = mapAiCategoryToExpenseCategory(geminiResult.category);
+            const detectedPayment = mapAiPaymentMethodToPaymentMethod(geminiResult.paymentMethod, detectedCategory);
+
+            const invoiceNum = geminiResult.invoiceNumber?.trim() || undefined;
+            const validatedInvoice = invoiceNum ? extractInvoiceNumbers(invoiceNum) : [];
+            const primaryInvoice = validatedInvoice.length > 0 ? validatedInvoice[0] : undefined;
+            const highlightedImg = primaryInvoice ? await applyInvoiceHighlight(pieceImage) : pieceImage;
+
+            allParsedItems.push({
+              id: `gemini-${Date.now()}-${i}-${k}`,
+              category: detectedCategory,
+              paymentMethod: detectedPayment,
+              date: geminiResult.date,
+              amount: geminiResult.totalAmount,
+              place: geminiResult.shopName,
+              invoiceNumber: primaryInvoice?.normalizedNumber || invoiceNum,
+              isInvoiceValid: primaryInvoice?.isCheckDigitValid,
+              hasInvoiceHighlight: !!primaryInvoice,
+              originalImageUrl: pieceImage,
+              processedImageUrl: highlightedImg,
+              etcDetails: detectedCategory === 'etc' ? {
+                entryGate: geminiResult.entryGate,
+                exitGate: geminiResult.exitGate,
+                splitIndex: geminiResults.length > 1 ? k + 1 : undefined
+              } : undefined,
+              etcType: detectedCategory === 'etc' ? (geminiResult.etcType || 'jissha') : undefined,
+              etcPaidByGuide: false, // 初期値は会社ETC（引かない）
+              rawText: geminiResult.rawJson || ''
+            });
+          }
           itemParsed = true;
         } catch (geminiErr) {
           console.warn('Gemini AI解析失敗、ローカル推論エンジンへフォールバック:', geminiErr);

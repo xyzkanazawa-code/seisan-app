@@ -45,6 +45,8 @@ export const EditReceiptModal: React.FC<EditReceiptModalProps> = ({
   const [aiMemo, setAiMemo] = useState('');
   const [entryGate, setEntryGate] = useState('');
   const [exitGate, setExitGate] = useState('');
+  const [etcType, setEtcType] = useState<'jissha' | 'kaiso'>('jissha');
+  const [etcPaidByGuide, setEtcPaidByGuide] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState(false);
   const [currentProcessedImageUrl, setCurrentProcessedImageUrl] = useState('');
   const [isCroppingModalOpen, setIsCroppingModalOpen] = useState(false);
@@ -60,6 +62,8 @@ export const EditReceiptModal: React.FC<EditReceiptModalProps> = ({
       setPlace(receipt.place || '');
       setInvoiceNumber(receipt.invoiceNumber || '');
       setCurrentProcessedImageUrl(receipt.processedImageUrl || receipt.originalImageUrl || '');
+      setEtcType(receipt.etcType || 'jissha');
+      setEtcPaidByGuide(Boolean(receipt.etcPaidByGuide));
 
       // 既存データの救済：もし memo に 【購入品目】 が含まれていて aiMemo がない場合、自動で aiMemo に移して memo（手打ち用）を空にする
       let m = receipt.memo || '';
@@ -133,6 +137,8 @@ export const EditReceiptModal: React.FC<EditReceiptModalProps> = ({
         invoiceNumber: formattedInvoice,
         isInvoiceValid: finalInvoiceValid,
         etcDetails,
+        etcType: category === 'etc' ? etcType : undefined,
+        etcPaidByGuide: category === 'etc' ? etcPaidByGuide : undefined,
         processedImageUrl: currentProcessedImageUrl || receipt.processedImageUrl,
         memo: memo.trim(),
         aiMemo: aiMemo.trim() || undefined
@@ -447,36 +453,124 @@ export const EditReceiptModal: React.FC<EditReceiptModalProps> = ({
             {category === 'etc' && (
               <div
                 style={{
-                  padding: 10,
+                  padding: 12,
                   borderRadius: 'var(--radius-sm)',
                   background: 'rgba(59, 130, 246, 0.08)',
                   border: '1px solid rgba(59, 130, 246, 0.25)',
-                  marginBottom: 12
+                  marginBottom: 12,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10
                 }}
               >
-                <div style={{ fontSize: '0.74rem', color: '#60a5fa', fontWeight: 700, marginBottom: 6 }}>
-                  🚗 ETC料金所区間
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                  <div>
-                    <label style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>入口料金所</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder="例: 東京"
-                      value={entryGate}
-                      onChange={(e) => setEntryGate(e.target.value)}
-                    />
+                {/* 回送 / 実車 ボタン */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.74rem', color: '#60a5fa', fontWeight: 800, marginBottom: 6 }}>
+                    🚗 ETC運行分類（実車 / 回送）
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => setEtcType('jissha')}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: etcType === 'jissha' ? '2px solid #3b82f6' : '1px solid var(--border-color)',
+                        background: etcType === 'jissha' ? 'rgba(59, 130, 246, 0.3)' : 'rgba(15,23,42,0.6)',
+                        color: etcType === 'jissha' ? '#ffffff' : 'var(--text-muted)',
+                        fontWeight: 800,
+                        fontSize: '0.82rem',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      🚌 実車
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEtcType('kaiso')}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: etcType === 'kaiso' ? '2px solid #f59e0b' : '1px solid var(--border-color)',
+                        background: etcType === 'kaiso' ? 'rgba(245, 158, 11, 0.3)' : 'rgba(15,23,42,0.6)',
+                        color: etcType === 'kaiso' ? '#ffffff' : 'var(--text-muted)',
+                        fontWeight: 800,
+                        fontSize: '0.82rem',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      🔄 回送
+                    </button>
                   </div>
-                  <div>
-                    <label style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>出口料金所</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder="例: 日光"
-                      value={exitGate}
-                      onChange={(e) => setExitGate(e.target.value)}
-                    />
+                </div>
+
+                {/* 預り金から引く / 引かない ボタン */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.74rem', color: '#60a5fa', fontWeight: 800, marginBottom: 6 }}>
+                    👛 ガイド預り金精算（引く / 引かない）
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => setEtcPaidByGuide(false)}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: !etcPaidByGuide ? '2px solid #10b981' : '1px solid var(--border-color)',
+                        background: !etcPaidByGuide ? 'rgba(16, 185, 129, 0.25)' : 'rgba(15,23,42,0.6)',
+                        color: !etcPaidByGuide ? '#ffffff' : 'var(--text-muted)',
+                        fontWeight: 800,
+                        fontSize: '0.8rem',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      🏢 引かない (会社ETC)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEtcPaidByGuide(true)}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: etcPaidByGuide ? '2px solid #a855f7' : '1px solid var(--border-color)',
+                        background: etcPaidByGuide ? 'rgba(168, 85, 247, 0.3)' : 'rgba(15,23,42,0.6)',
+                        color: etcPaidByGuide ? '#ffffff' : 'var(--text-muted)',
+                        fontWeight: 800,
+                        fontSize: '0.8rem',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      👛 預り金から引く
+                    </button>
+                  </div>
+                </div>
+
+                {/* 料金所区間 */}
+                <div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, marginBottom: 4 }}>
+                    料金所区間
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <div>
+                      <label style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>入口料金所</label>
+                      <input
+                        type="text"
+                        className="form-input"
+                        placeholder="例: 東京"
+                        value={entryGate}
+                        onChange={(e) => setEntryGate(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>出口料金所</label>
+                      <input
+                        type="text"
+                        className="form-input"
+                        placeholder="例: 日光"
+                        value={exitGate}
+                        onChange={(e) => setExitGate(e.target.value)}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>

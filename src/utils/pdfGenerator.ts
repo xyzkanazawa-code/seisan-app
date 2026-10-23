@@ -10,8 +10,18 @@ export interface PdfGenerationResult {
   dailySummaryPreviewUrl?: string; // 送付画像に基づく日別集計表サンプルプレビューURL
 }
 
+export interface DailyEtcBreakdown {
+  date: string;
+  etcJissha: number;     // 実車ETC
+  etcKaiso: number;      // 回送ETC
+  etcGuidePaid: number;  // ガイド預り金から引くETC
+  etcCompany: number;    // 会社ETC（引かない）
+  otherTotal: number;    // ETC以外の経費計
+  dayTotal: number;      // その日の全支出合計
+}
+
 /**
- * 項目別集計サマリー
+ * 項目別集計サマリー（実車・回送ETC、ガイド預り金切替連動）
  */
 export function calculateTourSummary(receipts: Receipt[], advancePayment: number) {
   const categoryTotals = {
@@ -39,12 +49,31 @@ export function calculateTourSummary(receipts: Receipt[], advancePayment: number
   };
 
   let grandTotal = 0;
+  let etcJissha = 0;    // ETC実車
+  let etcKaiso = 0;     // ETC回送
+  let etcGuidePaid = 0; // ガイド預り金から引くETC
+  let etcCompany = 0;   // 会社ETCカード（ガイド預り金からは引かない）
 
   for (const r of receipts) {
     categoryTotals[r.category] = (categoryTotals[r.category] || 0) + r.amount;
     const pm: PaymentMethod = r.paymentMethod || 'advance';
     paymentTotals[pm] = (paymentTotals[pm] || 0) + r.amount;
     grandTotal += r.amount;
+
+    // ETCの回送 / 実車・ガイド預り金分類
+    if (r.category === 'etc') {
+      if (r.etcType === 'kaiso') {
+        etcKaiso += r.amount;
+      } else {
+        etcJissha += r.amount; // デフォルトは実車
+      }
+
+      if (r.etcPaidByGuide) {
+        etcGuidePaid += r.amount;
+      } else {
+        etcCompany += r.amount;
+      }
+    }
   }
 
   // 前払い金（仮払金）として登録された実費合計
@@ -74,6 +103,10 @@ export function calculateTourSummary(receipts: Receipt[], advancePayment: number
     categoryTotals,
     paymentTotals,
     grandTotal,
+    etcJissha,
+    etcKaiso,
+    etcGuidePaid,
+    etcCompany,
     advanceOutlay,
     cashOutlay,
     rawAdvanceOutlay,
@@ -83,6 +116,51 @@ export function calculateTourSummary(receipts: Receipt[], advancePayment: number
     advanceRemaining,
     balance
   };
+}
+
+/**
+ * 日々の計算（日別集計・実車回送ETC分離）
+ */
+export function calculateDailyBreakdown(receipts: Receipt[]): DailyEtcBreakdown[] {
+  const map = new Map<string, DailyEtcBreakdown>();
+
+  for (const r of receipts) {
+    const d = r.date || '日付未設定';
+    let entry = map.get(d);
+    if (!entry) {
+      entry = {
+        date: d,
+        etcJissha: 0,
+        etcKaiso: 0,
+        etcGuidePaid: 0,
+        etcCompany: 0,
+        otherTotal: 0,
+        dayTotal: 0
+      };
+      map.set(d, entry);
+    }
+
+    entry.dayTotal += r.amount;
+
+    if (r.category === 'etc') {
+      if (r.etcType === 'kaiso') {
+        entry.etcKaiso += r.amount;
+      } else {
+        entry.etcJissha += r.amount;
+      }
+
+      if (r.etcPaidByGuide) {
+        entry.etcGuidePaid += r.amount;
+      } else {
+        entry.etcCompany += r.amount;
+      }
+    } else {
+      entry.otherTotal += r.amount;
+    }
+  }
+
+  // 日付昇順でソート
+  return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
 /**
@@ -563,7 +641,7 @@ export async function renderDailySummarySamplePage(
   const incomeRows: RowDef[] = [
     {
       id: 'advance',
-      name: '全日本交通 仮払金 (円)',
+      name: '仮払金 / 前渡し金 (円)',
       isIncome: true,
       customAmounts: (_k, idx) => (idx === 0 ? tour.advancePayment : ''),
       customSubtotal: () => tour.advancePayment
@@ -572,29 +650,27 @@ export async function renderDailySummarySamplePage(
       id: 'guide_highway',
       name: 'ガイドからの預り金（高速）',
       isIncome: true,
-      customAmounts: () => '',
-      customSubtotal: () => 0
+      filter: (r) => r.category === 'etc' && !!r.etcPaidByGuide
     },
     {
       id: 'guide_overtime',
       name: 'ガイドからの預り金（残業）',
       isIncome: true,
-      customAmounts: () => '',
-      customSubtotal: () => 0
+      filter: (r) => r.category === 'overtime'
     }
   ];
 
-  // 高速料金セクション
+  // 高速料金セクション（実車・回送ボタン完全連動）
   const highwayRows: RowDef[] = [
     {
       id: 'highway_actual',
       name: '実車（載有乗客的车）',
-      filter: (r) => (r.category === 'etc' || r.category === 'toll') && !r.memo?.includes('回送')
+      filter: (r) => (r.category === 'etc' || r.category === 'toll') && r.etcType !== 'kaiso' && !r.memo?.includes('回送')
     },
     {
       id: 'highway_empty',
       name: '回送（空車掉頭）',
-      filter: (r) => (r.category === 'etc' || r.category === 'toll') && !!r.memo?.includes('回送')
+      filter: (r) => (r.category === 'etc' || r.category === 'toll') && (r.etcType === 'kaiso' || !!r.memo?.includes('回送'))
     }
   ];
 

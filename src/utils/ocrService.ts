@@ -17,6 +17,8 @@ export interface ParsedReceiptItem {
   processedImageUrl: string;
   imageHash?: string;
   etcDetails?: EtcDetails;
+  etcType?: 'jissha' | 'kaiso'; // 実車 or 回送
+  etcPaidByGuide?: boolean;   // ガイド預り金から引くかどうか
   memo?: string;
   aiMemo?: string;
   rawText: string;
@@ -701,15 +703,15 @@ export function extractTourCodeFromText(text: string): string | null {
 }
 
 /**
- * 長い1枚のETC利用証明書から「御利用書」キーワードをデリミタとして検出し、
+ * 長い1枚のETC利用証明書からキーワードや区間デリミタを検出し、
  * 1走行ごとに分割したカード配列を生成
  */
 export async function parseAndSplitEtcReceipt(
   fullText: string,
   imageSrc: string
 ): Promise<ParsedReceiptItem[] | null> {
-  // 「御利用書」が複数含まれるかチェック
-  const delimiterRegex = /御利用書/g;
+  // ETCの区切りキーワード（御利用書、利用証明書、通行料金、ETC利用など）を検出
+  const delimiterRegex = /(?:御利用書|利用証明書|ETC利用|通行料金|ETC明細)/g;
   const matches = [...fullText.matchAll(delimiterRegex)];
 
   if (matches.length <= 1) {
@@ -721,10 +723,9 @@ export async function parseAndSplitEtcReceipt(
   // 各セクションの画像をクロップ
   const slicedImages = await sliceEtcReceipt(imageSrc, sectionsCount);
 
-  // テキストを「御利用書」で分割
-  const rawSections = fullText.split(/御利用書/);
-  // 先頭の空文字等を除く
-  const textSections = rawSections.slice(1);
+  // テキストを分割
+  const rawSections = fullText.split(/(?:御利用書|利用証明書|ETC利用|通行料金|ETC明細)/);
+  const textSections = rawSections.filter((s) => s.trim().length > 0);
 
   const results: ParsedReceiptItem[] = [];
 
@@ -768,6 +769,8 @@ export async function parseAndSplitEtcReceipt(
         exitGate,
         splitIndex: i + 1
       },
+      etcType: 'jissha', // デフォルト実車
+      etcPaidByGuide: false, // デフォルト会社ETC（引かない）
       rawText: sectionText
     });
   }

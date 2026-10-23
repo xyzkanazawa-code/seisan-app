@@ -1,6 +1,6 @@
 import { db, type Receipt, type ExpenseCategory } from '../db';
 
-export type DuplicateConfidence = 'exact_image' | 'high' | 'medium';
+export type DuplicateConfidence = 'exact_image' | 'high' | 'medium' | 'low';
 
 export interface DuplicateMatch {
   existingReceipt: Receipt;
@@ -9,6 +9,7 @@ export interface DuplicateMatch {
   isSameTour: boolean;
   confidence: DuplicateConfidence;
   reasons: string[];
+  isEtc?: boolean; // ETCによる同一高速区間の利用かどうか（控えめ通知用）
 }
 
 export interface DuplicateCheckCandidate {
@@ -139,13 +140,14 @@ export function evaluateDuplicatePair(
   existing: Receipt,
   candidateHash?: string,
   existingHash?: string
-): { confidence: DuplicateConfidence; reasons: string[] } | null {
+): { confidence: DuplicateConfidence; reasons: string[]; isEtc?: boolean } | null {
   // 自分自身との比較はスキップ
   if (candidate.id !== undefined && existing.id !== undefined && String(candidate.id) === String(existing.id)) {
     return null;
   }
 
   const reasons: string[] = [];
+  const isEtcPair = candidate.category === 'etc' || existing.category === 'etc';
 
   // 1. 画像完全一致または知覚ハッシュ一致チェック
   if (
@@ -156,7 +158,7 @@ export function evaluateDuplicatePair(
     // ただし手動入力ダミー画像（サイズが非常に小さい等）の場合は内容も見る
     if (candidate.imageUrl.length > 15000) {
       reasons.push('同一のレシート画像データ');
-      return { confidence: 'exact_image', reasons };
+      return { confidence: 'exact_image', reasons, isEtc: false };
     }
   }
 
@@ -164,7 +166,7 @@ export function evaluateDuplicatePair(
     const dist = getHashDistance(candidateHash, existingHash);
     if (dist <= 3) {
       reasons.push('レシート画像がほぼ同一');
-      return { confidence: 'exact_image', reasons };
+      return { confidence: 'exact_image', reasons, isEtc: false };
     }
   }
 
@@ -192,26 +194,35 @@ export function evaluateDuplicatePair(
     candidate.category && existing.category && candidate.category === existing.category
   );
 
-  // 2. 高確度重複 (High):
+  // ETCの場合：同じ高速区間（往復等）の利用が多いため、画像が同一でない場合は控えめ扱い（low）
+  if (isEtcPair) {
+    if (isSameDate && isSameAmount && placeMatched) {
+      reasons.push(`同日の同一ETC区間・料金(¥${existingAmount.toLocaleString()}) ※往復等の正常な利用の可能性があります`);
+      return { confidence: 'low', reasons, isEtc: true };
+    }
+    return null;
+  }
+
+  // 2. 高確度重複 (High)（ETC以外）:
   // - 利用日一致 + 金額一致 + (店舗名類似 または インボイス番号一致)
   if (isSameDate && isSameAmount && (placeMatched || invoiceMatched)) {
     reasons.push(`利用日(${existing.date})と金額(¥${existingAmount.toLocaleString()})が一致`);
     if (placeMatched) reasons.push(`利用場所「${existing.place}」が一致・類似`);
     if (invoiceMatched) reasons.push(`インボイス番号(${normExistInv})が一致`);
-    return { confidence: 'high', reasons };
+    return { confidence: 'high', reasons, isEtc: false };
   }
 
-  // 3. 中確度重複 (Medium):
+  // 3. 中確度重複 (Medium)（ETC以外）:
   // パターンA: 同一ツアー内で 利用日一致 + 金額一致 + 科目一致（OCRと手入力で店名表記が異なるケース）
   if (isSameDate && isSameAmount && categoryMatched) {
     reasons.push(`同じ日付(${existing.date})・同じ金額(¥${existingAmount.toLocaleString()})・同じ科目の明細が存在`);
-    return { confidence: 'medium', reasons };
+    return { confidence: 'medium', reasons, isEtc: false };
   }
 
   // パターンB: 同一ツアー内で 利用日一致 + 金額一致（特に金額が500円以上、または端数のある金額）
   if (isSameDate && isSameAmount && candidate.tourId === existing.tourId) {
     reasons.push(`同じ日付(${existing.date})・同じ金額(¥${existingAmount.toLocaleString()})の明細が存在`);
-    return { confidence: 'medium', reasons };
+    return { confidence: 'medium', reasons, isEtc: false };
   }
 
   // パターンC: 日付が1日違いまたは読み取りズレだが、金額 + 店舗名 + インボイス番号が完全一致
@@ -219,7 +230,7 @@ export function evaluateDuplicatePair(
     reasons.push(
       `金額(¥${existingAmount.toLocaleString()})・店舗名「${existing.place}」・インボイス番号が完全一致（日付のみ相違: ${existing.date}）`
     );
-    return { confidence: 'medium', reasons };
+    return { confidence: 'medium', reasons, isEtc: false };
   }
 
   return null;
@@ -257,7 +268,8 @@ export async function checkReceiptDuplicates(
           tourTitle: tour?.title,
           isSameTour,
           confidence: evalResult.confidence,
-          reasons: evalResult.reasons
+          reasons: evalResult.reasons,
+          isEtc: evalResult.isEtc
         });
       }
     }
@@ -266,7 +278,8 @@ export async function checkReceiptDuplicates(
     const confidenceOrder: Record<DuplicateConfidence, number> = {
       exact_image: 3,
       high: 2,
-      medium: 1
+      medium: 1,
+      low: 0
     };
 
     matches.sort((a, b) => {
@@ -284,8 +297,8 @@ export async function checkReceiptDuplicates(
 /**
  * ツアー内の登録済みレシート一覧から、互いに重複している可能性があるペア・グループを検出する
  */
-export function findDuplicateGroupsInTour(receipts: Receipt[]): Map<number, { reasons: string[]; matchedWithIds: number[] }> {
-  const duplicateMap = new Map<number, { reasons: string[]; matchedWithIds: number[] }>();
+export function findDuplicateGroupsInTour(receipts: Receipt[]): Map<number, { reasons: string[]; matchedWithIds: number[]; isEtcOnly: boolean }> {
+  const duplicateMap = new Map<number, { reasons: string[]; matchedWithIds: number[]; isEtcOnly: boolean }>();
 
   for (let i = 0; i < receipts.length; i++) {
     for (let j = i + 1; j < receipts.length; j++) {
@@ -322,22 +335,26 @@ export function findDuplicateGroupsInTour(receipts: Receipt[]): Map<number, { re
       );
 
       if (evalResult) {
-        const prevA = duplicateMap.get(rA.id) || { reasons: [], matchedWithIds: [] };
+        const isEtc = Boolean(evalResult.isEtc);
+
+        const prevA = duplicateMap.get(rA.id) || { reasons: [], matchedWithIds: [], isEtcOnly: true };
         if (!prevA.matchedWithIds.includes(rB.id)) {
           prevA.matchedWithIds.push(rB.id);
         }
         for (const reason of evalResult.reasons) {
           if (!prevA.reasons.includes(reason)) prevA.reasons.push(reason);
         }
+        if (!isEtc) prevA.isEtcOnly = false;
         duplicateMap.set(rA.id, prevA);
 
-        const prevB = duplicateMap.get(rB.id) || { reasons: [], matchedWithIds: [] };
+        const prevB = duplicateMap.get(rB.id) || { reasons: [], matchedWithIds: [], isEtcOnly: true };
         if (!prevB.matchedWithIds.includes(rA.id)) {
           prevB.matchedWithIds.push(rA.id);
         }
         for (const reason of evalResult.reasons) {
           if (!prevB.reasons.includes(reason)) prevB.reasons.push(reason);
         }
+        if (!isEtc) prevB.isEtcOnly = false;
         duplicateMap.set(rB.id, prevB);
       }
     }

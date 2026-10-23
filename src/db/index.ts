@@ -63,6 +63,8 @@ export interface Receipt {
   processedImageUrl: string;  // 証拠画像（黄色ハイライト付きData URL）
   imageHash?: string;         // 二重登録防止用の画像知覚ハッシュ
   etcDetails?: EtcDetails;    // ETC分割情報
+  etcType?: 'jissha' | 'kaiso'; // ETC分類: 'jissha' (実車) | 'kaiso' (回送)
+  etcPaidByGuide?: boolean;   // ガイド預り金から引くかどうか (true: 預り金から引く, false: 引かない(会社ETC等))
   memo?: string;              // 備考（手入力）
   aiMemo?: string;            // AI読取項目（品目・OCR解析情報）
   createdAt: number;

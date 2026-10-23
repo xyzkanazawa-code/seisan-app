@@ -18,7 +18,7 @@ import {
   type Receipt,
   type DriverProfile
 } from '../db';
-import { calculateTourSummary, generateTourExpensePdf, type PdfGenerationResult } from '../utils/pdfGenerator';
+import { calculateTourSummary, calculateDailyBreakdown, generateTourExpensePdf, type PdfGenerationResult } from '../utils/pdfGenerator';
 import { sortReceiptsByDate } from '../utils/receiptSort';
 import { findDuplicateGroupsInTour } from '../utils/duplicateChecker';
 import { PdfPreviewModal } from './PdfPreviewModal';
@@ -79,6 +79,22 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
     }
   };
 
+  // ETCの実車・回送の切り替え（ワンタップ）
+  const handleToggleEtcType = async (receipt: Receipt) => {
+    if (!receipt.id) return;
+    const newType = receipt.etcType === 'kaiso' ? 'jissha' : 'kaiso';
+    await db.receipts.update(receipt.id, { etcType: newType });
+    loadReceipts();
+  };
+
+  // ETCの預り金から引く/引かないの切り替え（ワンタップ）
+  const handleToggleEtcGuide = async (receipt: Receipt) => {
+    if (!receipt.id) return;
+    const newStatus = !receipt.etcPaidByGuide;
+    await db.receipts.update(receipt.id, { etcPaidByGuide: newStatus });
+    loadReceipts();
+  };
+
   // 運行ステータス（進行中 ⇔ 完了）切り替え
   const toggleTourStatus = async () => {
     if (!tour.id) return;
@@ -117,9 +133,12 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
   };
 
   const summary = calculateTourSummary(receipts, tour.advancePayment);
+  const dailyBreakdown = calculateDailyBreakdown(receipts);
 
   // ツアー内の登録済みレシート同士で二重登録（重複）の疑いがあるものを自動検出
   const duplicateMap = findDuplicateGroupsInTour(receipts);
+  // ETCのみの重複（往復など）を除いた、目立つべき重複件数
+  const severeDuplicateCount = Array.from(duplicateMap.values()).filter((v) => !v.isEtcOnly).length;
 
   // フィルタリングされたレシート
   const filteredReceipts =
@@ -380,6 +399,40 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
           </span>
         </div>
 
+        {/* 🚗 ETC最終計算内訳（回送・実車・ガイド預り金引当 分離表示） */}
+        <div
+          style={{
+            marginTop: 10,
+            padding: '10px 14px',
+            borderRadius: 'var(--radius-sm)',
+            background: 'rgba(59, 130, 246, 0.08)',
+            border: '1px solid rgba(59, 130, 246, 0.25)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 10
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', fontWeight: 800, color: '#93c5fd' }}>
+            <span>🚗 ETC最終計算内訳:</span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: '0.82rem', flexWrap: 'wrap' }}>
+            <span style={{ color: '#cbd5e1' }}>
+              実車計: <strong style={{ color: '#38bdf8', fontFamily: 'var(--font-num)' }}>¥{summary.etcJissha.toLocaleString()}</strong>
+            </span>
+            <span style={{ color: '#cbd5e1' }}>
+              回送計: <strong style={{ color: '#f59e0b', fontFamily: 'var(--font-num)' }}>¥{summary.etcKaiso.toLocaleString()}</strong>
+            </span>
+            {summary.etcGuidePaid > 0 && (
+              <span style={{ color: '#c084fc', fontWeight: 700 }}>
+                (うちガイド預り金精算: ¥{summary.etcGuidePaid.toLocaleString()})
+              </span>
+            )}
+          </div>
+        </div>
+
         {/* ミネラルウォーター本数管理（PDF鑑表印字連動） */}
         <div
           style={{
@@ -540,7 +593,8 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
         }}
       >
         {[
-          { key: 'etc', label: 'ETC', sum: summary.categoryTotals.etc, cls: 'cat-etc' },
+          { key: 'etc_jissha', label: 'ETC実車', sum: summary.etcJissha, cls: 'cat-etc' },
+          { key: 'etc_kaiso', label: 'ETC回送', sum: summary.etcKaiso, cls: 'cat-etc' },
           { key: 'toll', label: '有料道', sum: summary.categoryTotals.toll, cls: 'cat-toll' },
           { key: 'parking', label: '駐車', sum: summary.categoryTotals.parking, cls: 'cat-parking' },
           { key: 'fuel', label: '燃料', sum: summary.categoryTotals.fuel, cls: 'cat-fuel' },
@@ -578,6 +632,72 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
           </div>
         ))}
       </div>
+
+      {/* 📅 日々の計算（日別集計・実車回送ETC分離） */}
+      {dailyBreakdown.length > 0 && (
+        <div
+          className="glass-card"
+          style={{
+            padding: '12px 14px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+            background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.7), rgba(15, 23, 42, 0.75))',
+            border: '1px solid rgba(59, 130, 246, 0.25)'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: '0.86rem', fontWeight: 800, color: '#93c5fd', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span>📅 日々の計算（日別集計・実車＆回送ETC別）</span>
+            </span>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>全 {dailyBreakdown.length} 日間</span>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {dailyBreakdown.map((day) => (
+              <div
+                key={day.date}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  background: 'rgba(255, 255, 255, 0.03)',
+                  border: '1px solid rgba(255, 255, 255, 0.06)',
+                  fontSize: '0.78rem',
+                  flexWrap: 'wrap',
+                  gap: 8
+                }}
+              >
+                <div style={{ fontWeight: 800, color: '#f8fafc', minWidth: 90 }}>
+                  {day.date}
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <span style={{ color: '#cbd5e1' }}>
+                    実車ETC: <strong style={{ color: '#38bdf8', fontFamily: 'var(--font-num)' }}>¥{day.etcJissha.toLocaleString()}</strong>
+                  </span>
+                  <span style={{ color: '#cbd5e1' }}>
+                    回送ETC: <strong style={{ color: '#f59e0b', fontFamily: 'var(--font-num)' }}>¥{day.etcKaiso.toLocaleString()}</strong>
+                  </span>
+                  {day.etcGuidePaid > 0 && (
+                    <span style={{ color: '#c084fc', fontWeight: 700 }}>
+                      (預り引: ¥{day.etcGuidePaid.toLocaleString()})
+                    </span>
+                  )}
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    他経費: ¥{day.otherTotal.toLocaleString()}
+                  </span>
+                  <span style={{ fontWeight: 800, color: '#ffffff', fontFamily: 'var(--font-num)', marginLeft: 'auto' }}>
+                    日計: ¥{day.dayTotal.toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 登録レシート見出し & フィルター & 手動追加 */}
       <div
@@ -621,25 +741,26 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
         </button>
       </div>
 
-      {/* ⚠️ ツアー内二重登録（重複レシート）検知バナー */}
-      {duplicateMap.size > 0 && (
+      {/* 二重登録検知バナー：ETC以外の重複がある時は目立つ警告、ETCのみの重複は控えめ案内 */}
+      {severeDuplicateCount > 0 ? (
         <div
           style={{
             padding: '12px 14px',
             borderRadius: 'var(--radius-sm)',
-            background: 'rgba(245, 158, 11, 0.14)',
-            border: '1.5px solid rgba(245, 158, 11, 0.6)',
+            background: 'rgba(245, 158, 11, 0.16)',
+            border: '2px solid rgba(245, 158, 11, 0.7)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             gap: 10,
-            flexWrap: 'wrap'
+            flexWrap: 'wrap',
+            boxShadow: '0 4px 18px rgba(245, 158, 11, 0.2)'
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.82rem', color: '#fde68a', fontWeight: 700 }}>
-            <AlertTriangle size={17} color="#fbbf24" style={{ flexShrink: 0 }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.82rem', color: '#fef3c7', fontWeight: 800 }}>
+            <AlertTriangle size={18} color="#fbbf24" style={{ flexShrink: 0 }} />
             <span>
-              ⚠️ 二重登録の疑いがあるレシートが <strong>{duplicateMap.size}件</strong> あります（同じ日付・金額・店舗または画像）
+              ⚠️ 二重登録の疑いがあるレシートが <strong>{severeDuplicateCount}件</strong> あります！（同じ日付・金額・店舗または画像）
             </span>
           </div>
           <button
@@ -652,17 +773,38 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
               borderRadius: 'var(--radius-full)',
               fontSize: '0.74rem',
               fontWeight: 800,
-              background: activeCategoryFilter === 'duplicate' ? '#f59e0b' : 'rgba(245, 158, 11, 0.25)',
+              background: activeCategoryFilter === 'duplicate' ? '#f59e0b' : 'rgba(245, 158, 11, 0.3)',
               color: activeCategoryFilter === 'duplicate' ? '#0f172a' : '#fef08a',
               border: '1px solid rgba(245, 158, 11, 0.6)',
               cursor: 'pointer',
               whiteSpace: 'nowrap'
             }}
           >
-            {activeCategoryFilter === 'duplicate' ? 'すべて表示に戻す' : `重複候補のみ表示 (${duplicateMap.size})`}
+            {activeCategoryFilter === 'duplicate' ? 'すべて表示に戻す' : `重複候補のみ表示 (${severeDuplicateCount})`}
           </button>
         </div>
-      )}
+      ) : duplicateMap.size > 0 ? (
+        /* ETCのみの同一区間重複（控えめなお知らせ） */
+        <div
+          style={{
+            padding: '8px 12px',
+            borderRadius: 'var(--radius-sm)',
+            background: 'rgba(59, 130, 246, 0.1)',
+            border: '1px solid rgba(59, 130, 246, 0.3)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+            flexWrap: 'wrap',
+            fontSize: '0.74rem',
+            color: '#93c5fd'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span>ℹ️ 同一ETC高速区間の利用が {duplicateMap.size} 件あります（往復等は正常な利用です）</span>
+          </div>
+        </div>
+      ) : null}
 
       {/* カテゴリタブ */}
       <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
@@ -739,47 +881,90 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
                   gap: 10,
                   padding: '12px 14px',
                   border: dupEntry
-                    ? '1.5px solid rgba(245, 158, 11, 0.7)'
+                    ? dupEntry.isEtcOnly
+                      ? '1px solid rgba(59, 130, 246, 0.4)'
+                      : '1.5px solid rgba(245, 158, 11, 0.7)'
                     : undefined
                 }}
               >
                 {dupEntry && (
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 8,
-                      padding: '6px 10px',
-                      borderRadius: 6,
-                      background: 'rgba(245, 158, 11, 0.14)',
-                      border: '1px solid rgba(245, 158, 11, 0.4)',
-                      fontSize: '0.73rem',
-                      color: '#fde68a'
-                    }}
-                  >
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontWeight: 700, color: '#fbbf24' }}>
-                      <AlertTriangle size={13} color="#fbbf24" />
-                      ⚠️ 二重登録注意: {dupEntry.reasons.join(' / ')}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteReceipt(r.id)}
+                  dupEntry.isEtcOnly ? (
+                    // ETC同区間重複: 控えめ表示（往復利用などで頻出するため）
+                    <div
                       style={{
-                        padding: '2px 8px',
-                        borderRadius: 4,
-                        background: 'rgba(239, 68, 68, 0.2)',
-                        border: '1px solid rgba(239, 68, 68, 0.45)',
-                        color: '#fca5a5',
-                        fontSize: '0.7rem',
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                        whiteSpace: 'nowrap'
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                        padding: '5px 9px',
+                        borderRadius: 6,
+                        background: 'rgba(59, 130, 246, 0.1)',
+                        border: '1px solid rgba(59, 130, 246, 0.3)',
+                        fontSize: '0.72rem',
+                        color: '#93c5fd'
                       }}
                     >
-                      この明細を削除
-                    </button>
-                  </div>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <span>ℹ️</span>
+                        <span>同区間ETC利用（往復・連続等）: {dupEntry.reasons.join(' / ')}</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteReceipt(r.id)}
+                        style={{
+                          padding: '2px 7px',
+                          borderRadius: 4,
+                          background: 'rgba(239, 68, 68, 0.15)',
+                          border: '1px solid rgba(239, 68, 68, 0.3)',
+                          color: '#fca5a5',
+                          fontSize: '0.68rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        削除
+                      </button>
+                    </div>
+                  ) : (
+                    // その他経費の重複: 目立つ警告
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                        padding: '6px 10px',
+                        borderRadius: 6,
+                        background: 'rgba(245, 158, 11, 0.14)',
+                        border: '1px solid rgba(245, 158, 11, 0.4)',
+                        fontSize: '0.73rem',
+                        color: '#fde68a'
+                      }}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontWeight: 700, color: '#fbbf24' }}>
+                        <AlertTriangle size={13} color="#fbbf24" />
+                        ⚠️ 二重登録注意: {dupEntry.reasons.join(' / ')}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteReceipt(r.id)}
+                        style={{
+                          padding: '2px 8px',
+                          borderRadius: 4,
+                          background: 'rgba(239, 68, 68, 0.2)',
+                          border: '1px solid rgba(239, 68, 68, 0.45)',
+                          color: '#fca5a5',
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        この明細を削除
+                      </button>
+                    </div>
+                  )
                 )}
 
                 {/* 上段: サムネイル + 店舗/科目情報 + 金額/アクション */}
@@ -860,6 +1045,36 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
                           ? '残業代'
                           : 'その他'}
                       </span>
+                      {r.category === 'etc' && (
+                        <span
+                          style={{
+                            fontSize: '0.68rem',
+                            padding: '2px 6px',
+                            borderRadius: 4,
+                            fontWeight: 700,
+                            background: r.etcType === 'kaiso' ? 'rgba(245, 158, 11, 0.18)' : 'rgba(59, 130, 246, 0.18)',
+                            color: r.etcType === 'kaiso' ? '#fbbf24' : '#60a5fa',
+                            border: `1px solid ${r.etcType === 'kaiso' ? 'rgba(245, 158, 11, 0.35)' : 'rgba(59, 130, 246, 0.35)'}`
+                          }}
+                        >
+                          {r.etcType === 'kaiso' ? '回送' : '実車'}
+                        </span>
+                      )}
+                      {r.category === 'etc' && r.etcPaidByGuide && (
+                        <span
+                          style={{
+                            fontSize: '0.68rem',
+                            padding: '2px 6px',
+                            borderRadius: 4,
+                            fontWeight: 700,
+                            background: 'rgba(168, 85, 247, 0.2)',
+                            color: '#d8b4fe',
+                            border: '1px solid rgba(168, 85, 247, 0.4)'
+                          }}
+                        >
+                          👛 預り金
+                        </span>
+                      )}
                       <span
                         className="method-tag"
                         style={{
@@ -1003,6 +1218,105 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
                     </div>
                   </div>
                 </div>
+
+                {/* 🚌 ETCワンタップ切替バー（実車/回送 & ガイド預り金から引く/引かない） */}
+                {r.category === 'etc' && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      padding: '8px 10px',
+                      borderRadius: 6,
+                      background: 'rgba(59, 130, 246, 0.06)',
+                      border: '1px solid rgba(59, 130, 246, 0.18)'
+                    }}
+                  >
+                    {/* 実車 / 回送 切替 */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>区分:</span>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (r.etcType === 'kaiso') handleToggleEtcType(r);
+                          }}
+                          style={{
+                            padding: '3px 9px',
+                            borderRadius: 4,
+                            fontSize: '0.73rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            border: '1px solid',
+                            background: r.etcType !== 'kaiso' ? 'rgba(59, 130, 246, 0.3)' : 'rgba(255, 255, 255, 0.05)',
+                            borderColor: r.etcType !== 'kaiso' ? '#3b82f6' : 'rgba(255, 255, 255, 0.15)',
+                            color: r.etcType !== 'kaiso' ? '#93c5fd' : 'var(--text-sub)'
+                          }}
+                          title="実車として計算"
+                        >
+                          🚌 実車
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (r.etcType !== 'kaiso') handleToggleEtcType(r);
+                          }}
+                          style={{
+                            padding: '3px 9px',
+                            borderRadius: 4,
+                            fontSize: '0.73rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            border: '1px solid',
+                            background: r.etcType === 'kaiso' ? 'rgba(245, 158, 11, 0.25)' : 'rgba(255, 255, 255, 0.05)',
+                            borderColor: r.etcType === 'kaiso' ? '#f59e0b' : 'rgba(255, 255, 255, 0.15)',
+                            color: r.etcType === 'kaiso' ? '#fde68a' : 'var(--text-sub)'
+                          }}
+                          title="回送として計算"
+                        >
+                          🔄 回送
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* ガイド預り金 引く / 引かない 切替 */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>精算:</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleToggleEtcGuide(r);
+                        }}
+                        style={{
+                          padding: '3px 10px',
+                          borderRadius: 4,
+                          fontSize: '0.73rem',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          border: '1px solid',
+                          background: r.etcPaidByGuide
+                            ? 'rgba(168, 85, 247, 0.25)'
+                            : 'rgba(255, 255, 255, 0.05)',
+                          borderColor: r.etcPaidByGuide
+                            ? '#a855f7'
+                            : 'rgba(255, 255, 255, 0.2)',
+                          color: r.etcPaidByGuide ? '#e9d5ff' : 'var(--text-sub)'
+                        }}
+                        title="クリックしてガイド預り金精算を切り替え"
+                      >
+                        {r.etcPaidByGuide ? '👛 ガイド預り金から引く' : '🏢 引かない (通常精算)'}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* 📝 手入力の備考欄（幅を広げ、2段・3段でも文字を全部表示） */}
                 {displayMemo && (
