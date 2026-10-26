@@ -130,7 +130,12 @@ export const EditReceiptModal: React.FC<EditReceiptModalProps> = ({
 
       await db.receipts.update(receipt.id, {
         category,
-        paymentMethod,
+        paymentMethod:
+          category === 'etc'
+            ? etcPaidByGuide
+              ? 'advance'
+              : 'company_etc'
+            : paymentMethod,
         date,
         amount: Number(amount),
         place: place.trim() || '経費',
@@ -512,7 +517,10 @@ export const EditReceiptModal: React.FC<EditReceiptModalProps> = ({
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                     <button
                       type="button"
-                      onClick={() => setEtcPaidByGuide(false)}
+                      onClick={() => {
+                        setEtcPaidByGuide(false);
+                        setPaymentMethod('company_etc');
+                      }}
                       style={{
                         padding: '8px 10px',
                         borderRadius: 'var(--radius-sm)',
@@ -528,7 +536,10 @@ export const EditReceiptModal: React.FC<EditReceiptModalProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setEtcPaidByGuide(true)}
+                      onClick={() => {
+                        setEtcPaidByGuide(true);
+                        setPaymentMethod('advance');
+                      }}
                       style={{
                         padding: '8px 10px',
                         borderRadius: 'var(--radius-sm)',

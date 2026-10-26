@@ -105,9 +105,13 @@ export function App() {
     if (active && active.id) {
       const receipts = await db.receipts.where('tourId').equals(active.id).toArray();
       setActiveReceiptsCount(receipts.length);
-      // 前払い金および個人立替の実費合計（前渡金から引き算される対象）
+      // 前払い金および個人立替の実費合計（前渡金から引き算される対象：ETCのガイド預り金引当分も含む）
       const advanceOutlay = receipts
-        .filter((r) => r.paymentMethod === 'advance' || r.paymentMethod === 'cash')
+        .filter((r) =>
+          r.category === 'etc'
+            ? Boolean(r.etcPaidByGuide)
+            : r.paymentMethod === 'advance' || r.paymentMethod === 'cash'
+        )
         .reduce((sum, r) => sum + r.amount, 0);
       setActiveTotalExpense(advanceOutlay);
     } else {
@@ -306,9 +310,12 @@ export function App() {
       targetTourId = await db.tours.add(newTour);
     }
 
-    // カテゴリおよび支払方法のマッピング
+    // カテゴリおよび支払方法のマッピング（ETCでガイド預り金とした場合は仮払金: advance として差し引く）
     const mappedCategory = mapAiCategoryToExpenseCategory(receiptData.category);
-    const mappedPayment = mapAiPaymentMethodToPaymentMethod(undefined, mappedCategory);
+    const isEtcGuide = mappedCategory === 'etc' && Boolean(receiptData.etcPaidByGuide);
+    const mappedPayment = isEtcGuide
+      ? 'advance'
+      : mapAiPaymentMethodToPaymentMethod(undefined, mappedCategory);
 
     // 品目メモ（AI読取項目）を生成
     const itemsMemo = receiptData.items.length > 0

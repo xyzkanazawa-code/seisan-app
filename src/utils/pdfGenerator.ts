@@ -56,7 +56,14 @@ export function calculateTourSummary(receipts: Receipt[], advancePayment: number
 
   for (const r of receipts) {
     categoryTotals[r.category] = (categoryTotals[r.category] || 0) + r.amount;
-    const pm: PaymentMethod = r.paymentMethod || 'advance';
+    // ETCで「ガイド預り金から引く (etcPaidByGuide === true)」とした場合は仮払金(advance)からマイナスする
+    // 逆にETCで「引かない」場合は会社ETC(company_etc)として仮払金からは引かない
+    const pm: PaymentMethod =
+      r.category === 'etc'
+        ? r.etcPaidByGuide
+          ? 'advance'
+          : 'company_etc'
+        : r.paymentMethod || 'advance';
     paymentTotals[pm] = (paymentTotals[pm] || 0) + r.amount;
     grandTotal += r.amount;
 
@@ -349,10 +356,18 @@ async function renderSummaryPage(
     const catReceipts = receipts.filter((r) => r.category === cat.key);
     const count = catReceipts.length;
     const directSum = catReceipts
-      .filter((r) => r.paymentMethod === 'advance' || r.paymentMethod === 'cash')
+      .filter((r) =>
+        r.category === 'etc'
+          ? Boolean(r.etcPaidByGuide)
+          : r.paymentMethod === 'advance' || r.paymentMethod === 'cash'
+      )
       .reduce((s, r) => s + r.amount, 0);
     const cardSum = catReceipts
-      .filter((r) => r.paymentMethod !== 'advance' && r.paymentMethod !== 'cash')
+      .filter((r) =>
+        r.category === 'etc'
+          ? !r.etcPaidByGuide
+          : r.paymentMethod !== 'advance' && r.paymentMethod !== 'cash'
+      )
       .reduce((s, r) => s + r.amount, 0);
     const total = summary.categoryTotals[cat.key];
 
@@ -384,9 +399,9 @@ async function renderSummaryPage(
   ctx.font = 'bold 16px "Noto Sans JP", sans-serif';
   ctx.fillText('総合計', 80, tableY + 27);
   ctx.fillText(`${receipts.length} 件`, 280, tableY + 27);
-  ctx.fillText(`¥${summary.cashOutlay.toLocaleString()}`, 450, tableY + 27);
+  ctx.fillText(`¥${summary.totalDriverPaid.toLocaleString()}`, 450, tableY + 27);
   ctx.fillText(
-    `¥${(summary.grandTotal - summary.cashOutlay).toLocaleString()}`,
+    `¥${(summary.grandTotal - summary.totalDriverPaid).toLocaleString()}`,
     680,
     tableY + 27
   );
@@ -873,9 +888,13 @@ export async function renderDailySummarySamplePage(
     }
   });
 
-  // 右端枠: 出金合計（支出総額）※燃料(掛カード)を除いた現金精算対象の合計
-  const nonFuelReceipts = receipts.filter((r) => r.category !== 'fuel');
-  const totalExpense = nonFuelReceipts.reduce((sum, r) => sum + r.amount, 0);
+  // 右端枠: 出金合計（支出総額）※燃料(掛カード)および「預り金から引かない会社ETC」を除いた、仮払金からの差引対象合計
+  const deductibleReceipts = receipts.filter((r) => {
+    if (r.category === 'fuel') return false;
+    if (r.category === 'etc') return Boolean(r.etcPaidByGuide);
+    return r.paymentMethod === 'advance' || r.paymentMethod === 'cash';
+  });
+  const totalExpense = deductibleReceipts.reduce((sum, r) => sum + r.amount, 0);
   const expenseTotalY = mainY + thH + incomeSecH;
   const expenseTotalH = hwSecH + expenseSecH;
   ctx.strokeRect(incomeTotalX, expenseTotalY, colTotalW, expenseTotalH);
@@ -1131,8 +1150,14 @@ async function renderDetailsPage(
     // 支払区分
     ctx.textAlign = 'center';
     ctx.font = '13px "Noto Sans JP", sans-serif';
-    ctx.fillStyle = r.paymentMethod === 'cash' ? '#047857' : '#475569';
-    ctx.fillText(methodLabels[r.paymentMethod] || '立替', 880, tableY + 27);
+    const payLabel =
+      r.category === 'etc'
+        ? r.etcPaidByGuide
+          ? '前払い金(預り)'
+          : '会社ETC'
+        : methodLabels[r.paymentMethod] || '立替';
+    ctx.fillStyle = r.paymentMethod === 'cash' || r.etcPaidByGuide ? '#047857' : '#475569';
+    ctx.fillText(payLabel, 880, tableY + 27);
 
     // 金額
     ctx.textAlign = 'right';

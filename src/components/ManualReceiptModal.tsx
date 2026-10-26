@@ -50,7 +50,9 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
       .toArray()
       .then((existing) => {
         const advanceSpent = existing
-          .filter((r) => r.paymentMethod === 'advance')
+          .filter((r) =>
+            r.category === 'etc' ? Boolean(r.etcPaidByGuide) : r.paymentMethod === 'advance'
+          )
           .reduce((sum, r) => sum + r.amount, 0);
         const remaining = (activeTour.advancePayment || 0) - advanceSpent;
         setAdvanceRemaining(remaining);
@@ -160,7 +162,12 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
       const newReceipt: Omit<Receipt, 'id'> = {
         tourId: activeTour.id,
         category,
-        paymentMethod: category === 'etc' ? (paymentMethod === 'advance' || paymentMethod === 'cash' ? paymentMethod : 'company_etc') : paymentMethod,
+        paymentMethod:
+          category === 'etc'
+            ? etcPaidByGuide
+              ? 'advance'
+              : 'company_etc'
+            : paymentMethod,
         date,
         amount: Number(amount),
         place: place.trim() || (category === 'etc' ? 'ETC高速料金' : 'その他経費'),
@@ -476,7 +483,10 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                     <button
                       type="button"
-                      onClick={() => setEtcPaidByGuide(false)}
+                      onClick={() => {
+                        setEtcPaidByGuide(false);
+                        setPaymentMethod('company_etc');
+                      }}
                       style={{
                         padding: '8px 10px',
                         borderRadius: 'var(--radius-sm)',
@@ -497,7 +507,10 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setEtcPaidByGuide(true)}
+                      onClick={() => {
+                        setEtcPaidByGuide(true);
+                        setPaymentMethod('advance');
+                      }}
                       style={{
                         padding: '8px 10px',
                         borderRadius: 'var(--radius-sm)',

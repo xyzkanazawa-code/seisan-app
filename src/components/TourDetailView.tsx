@@ -88,10 +88,14 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
   };
 
   // ETCの預り金から引く/引かないの切り替え（ワンタップ）
+  // 「ガイド預り金から引く」にした場合は仮払金（前払い金: advance）からマイナスされるよう連動更新
   const handleToggleEtcGuide = async (receipt: Receipt) => {
     if (!receipt.id) return;
     const newStatus = !receipt.etcPaidByGuide;
-    await db.receipts.update(receipt.id, { etcPaidByGuide: newStatus });
+    await db.receipts.update(receipt.id, {
+      etcPaidByGuide: newStatus,
+      paymentMethod: newStatus ? 'advance' : 'company_etc'
+    });
     loadReceipts();
   };
 
@@ -357,9 +361,16 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
           </div>
 
           <div className="finance-item">
-            <span className="finance-label">前払い金実費計</span>
+            <span className="finance-label">
+              前払い金実費計
+              {summary.etcGuidePaid > 0 && (
+                <span style={{ fontSize: '0.65rem', color: '#c084fc', display: 'block', fontWeight: 700, marginTop: 1 }}>
+                  (うち預りETC: ¥{summary.etcGuidePaid.toLocaleString()})
+                </span>
+              )}
+            </span>
             <span className="finance-value val-amber">
-              ¥{summary.advanceOutlay.toLocaleString()}
+              ¥{summary.totalDriverPaid.toLocaleString()}
             </span>
           </div>
 
@@ -1079,19 +1090,19 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
                         className="method-tag"
                         style={{
                           background:
-                            r.paymentMethod === 'advance'
+                            (r.category === 'etc' ? r.etcPaidByGuide : r.paymentMethod === 'advance')
                               ? 'rgba(16, 185, 129, 0.15)'
                               : r.paymentMethod === 'cash'
                               ? 'rgba(245, 158, 11, 0.15)'
                               : 'rgba(59, 130, 246, 0.12)',
                           color:
-                            r.paymentMethod === 'advance'
+                            (r.category === 'etc' ? r.etcPaidByGuide : r.paymentMethod === 'advance')
                               ? '#34d399'
                               : r.paymentMethod === 'cash'
                               ? '#fbbf24'
                               : '#93c5fd',
                           border: `1px solid ${
-                            r.paymentMethod === 'advance'
+                            (r.category === 'etc' ? r.etcPaidByGuide : r.paymentMethod === 'advance')
                               ? 'rgba(16, 185, 129, 0.35)'
                               : r.paymentMethod === 'cash'
                               ? 'rgba(245, 158, 11, 0.35)'
@@ -1099,7 +1110,11 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
                           }`
                         }}
                       >
-                        {r.paymentMethod === 'advance'
+                        {r.category === 'etc'
+                          ? r.etcPaidByGuide
+                            ? '仮払金引当'
+                            : '会社ETC'
+                          : r.paymentMethod === 'advance'
                           ? '前払い金'
                           : r.paymentMethod === 'cash'
                           ? '個人立替'

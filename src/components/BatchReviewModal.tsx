@@ -298,7 +298,12 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
         recordsToInsert.push({
           tourId: activeTour.id!,
           category: item.category,
-          paymentMethod: item.paymentMethod,
+          paymentMethod:
+            item.category === 'etc'
+              ? item.etcPaidByGuide
+                ? 'advance'
+                : 'company_etc'
+              : item.paymentMethod,
           date: item.date,
           amount: Number(item.amount) || 0,
           place: item.place || '経費',
@@ -1059,7 +1064,12 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
                         <button
                           type="button"
-                          onClick={() => updateItem(item.id, { etcPaidByGuide: false })}
+                          onClick={() =>
+                            updateItem(item.id, {
+                              etcPaidByGuide: false,
+                              paymentMethod: 'company_etc'
+                            })
+                          }
                           style={{
                             padding: '6px 8px',
                             borderRadius: 'var(--radius-sm)',
@@ -1075,7 +1085,12 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
                         </button>
                         <button
                           type="button"
-                          onClick={() => updateItem(item.id, { etcPaidByGuide: true })}
+                          onClick={() =>
+                            updateItem(item.id, {
+                              etcPaidByGuide: true,
+                              paymentMethod: 'advance'
+                            })
+                          }
                           style={{
                             padding: '6px 8px',
                             borderRadius: 'var(--radius-sm)',
