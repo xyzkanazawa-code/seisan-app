@@ -522,12 +522,26 @@ export async function cropReceiptRegions(imageSrc: string): Promise<string[]> {
       cropCtx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
       const pieceDataUrl = cropCanvas.toDataURL('image/jpeg', 0.92);
 
-      // さらに切り出した断片に対しても外周余白をタイトにトリミング
-      const tightenedPiece = await autoTightCrop(pieceDataUrl);
-      croppedResults.push(tightenedPiece);
+      // さらに切り出した断片に対しても、斜め傾き・台形歪み・外周余白を自動で全自動補正
+      try {
+        const deskewed = await autoDeskewAndPerspective(pieceDataUrl);
+        croppedResults.push(deskewed.correctedDataUrl);
+      } catch {
+        const tightenedPiece = await autoTightCrop(pieceDataUrl);
+        croppedResults.push(tightenedPiece);
+      }
     }
 
-    return croppedResults.length > 0 ? croppedResults : [await autoTightCrop(imageSrc)];
+    if (croppedResults.length > 0) {
+      return croppedResults;
+    }
+
+    try {
+      const fallbackDeskewed = await autoDeskewAndPerspective(imageSrc);
+      return [fallbackDeskewed.correctedDataUrl];
+    } catch {
+      return [await autoTightCrop(imageSrc)];
+    }
   } catch (err) {
     console.warn('レシート自動クロップ例外発生。元画像を使用:', err);
     return [imageSrc];
