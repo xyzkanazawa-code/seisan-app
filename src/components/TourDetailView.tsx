@@ -1199,10 +1199,10 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
                           gap: 3,
                           cursor: 'pointer'
                         }}
-                        title="レシートの余白を切り取り・トリミング調整"
+                        title="レシートの斜め・台形補正および余白切り取り調整"
                       >
                         <Scissors size={13} />
-                        切り取り
+                        台形・切り取り
                       </button>
 
                       <button

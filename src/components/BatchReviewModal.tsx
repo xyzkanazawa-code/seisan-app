@@ -18,7 +18,7 @@ import { db, type Tour, type ExpenseCategory, type PaymentMethod, type Receipt }
 import { detectCategoryAndPlace, type ParsedReceiptItem } from '../utils/ocrService';
 import { learnFromReceipt } from '../utils/learningService';
 import { sortReceiptsByDate } from '../utils/receiptSort';
-import { autoTightCrop } from '../utils/imageProcessor';
+import { autoTightCrop, autoDeskewAndPerspective } from '../utils/imageProcessor';
 import {
   checkReceiptDuplicates,
   evaluateDuplicatePair,
@@ -51,14 +51,15 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
     Record<string, { dbMatches: DuplicateMatch[]; batchMatchIndex?: number; batchReasons?: string[] }>
   >({});
 
-  // ワンタップ余白自動カット
+  // ワンタップ斜め・台形・余白自動カット
   const handleQuickTighten = async (item: ParsedReceiptItem) => {
     setTighteningId(item.id);
     try {
-      const tightened = await autoTightCrop(item.processedImageUrl);
+      const res = await autoDeskewAndPerspective(item.processedImageUrl);
+      const tightened = await autoTightCrop(res.correctedDataUrl);
       updateItem(item.id, { processedImageUrl: tightened });
     } catch (e) {
-      console.warn('余白自動カット失敗:', e);
+      console.warn('斜め・余白自動カット失敗:', e);
     } finally {
       setTighteningId(null);
     }
@@ -758,7 +759,7 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
                   title="周囲の余白・机を自動検出してタイトに切り詰めます"
                 >
                   <Scissors size={13} />
-                  {tighteningId === item.id ? '余白カット中...' : '余白を自動カット'}
+                  {tighteningId === item.id ? '自動補正中...' : '✨ 斜め・台形＋余白自動カット'}
                 </button>
 
                 <button
@@ -777,9 +778,9 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
                     fontWeight: 600,
                     cursor: 'pointer'
                   }}
-                  title="手動で上下左右の切り取り位置を微調整します"
+                  title="手動で斜め・台形補正や上下左右の切り取り位置を微調整します"
                 >
-                  <span>📐 切り取り調整</span>
+                  <span>📐 台形・切り取り調整</span>
                 </button>
               </div>
 

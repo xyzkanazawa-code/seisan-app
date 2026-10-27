@@ -792,3 +792,340 @@ export async function cropImageWithInsets(
   }
 }
 
+export interface PerspectiveOptions {
+  /** 傾き角度（度: -45 〜 +45） */
+  angleDeg: number;
+  /** 90度単位の回転（0 | 90 | 180 | 270） */
+  rotate90: number;
+  /** 縦の台形補正（-50 〜 +50: プラスは上辺が狭い台形を広げる、マイナスは下辺が狭い台形を広げる） */
+  keystoneV: number;
+  /** 横の台形補正（-50 〜 +50: プラスは左辺が狭い台形を広げる、マイナスは右辺が狭い台形を広げる） */
+  keystoneH: number;
+}
+
+/**
+ * 2次元射影変換（ホモグラフィ：srcの4頂点 -> dstの矩形 [0,0]-[dstW,dstH]）の逆変換行列を計算し、
+ * バイリニア補間で歪み・台形を補正した画像を生成する
+ */
+function warpPerspectiveQuadToRect(
+  srcCanvas: HTMLCanvasElement,
+  quad: [
+    { x: number; y: number }, // 左上 (top-left)
+    { x: number; y: number }, // 右上 (top-right)
+    { x: number; y: number }, // 右下 (bottom-right)
+    { x: number; y: number }  // 左下 (bottom-left)
+  ],
+  dstW: number,
+  dstH: number
+): HTMLCanvasElement {
+  const outCanvas = document.createElement('canvas');
+  outCanvas.width = dstW;
+  outCanvas.height = dstH;
+  const outCtx = outCanvas.getContext('2d');
+  const srcCtx = srcCanvas.getContext('2d');
+  if (!outCtx || !srcCtx) return srcCanvas;
+
+  const srcW = srcCanvas.width;
+  const srcH = srcCanvas.height;
+  const srcData = srcCtx.getImageData(0, 0, srcW, srcH).data;
+  const outImgData = outCtx.createImageData(dstW, dstH);
+  const dstData = outImgData.data;
+
+  // 正規化座標 (u, v) ∈ [0, 1] × [0, 1] から quad の4頂点への双線形写像（台形・四角形逆変換）
+  const [p0, p1, p2, p3] = quad;
+
+  for (let y = 0; y < dstH; y++) {
+    const v = dstH > 1 ? y / (dstH - 1) : 0;
+    const oneMinusV = 1 - v;
+
+    // 左端と右端の補間点
+    const leftX = oneMinusV * p0.x + v * p3.x;
+    const leftY = oneMinusV * p0.y + v * p3.y;
+    const rightX = oneMinusV * p1.x + v * p2.x;
+    const rightY = oneMinusV * p1.y + v * p2.y;
+
+    for (let x = 0; x < dstW; x++) {
+      const u = dstW > 1 ? x / (dstW - 1) : 0;
+      const sx = leftX + u * (rightX - leftX);
+      const sy = leftY + u * (rightY - leftY);
+
+      const dstIdx = (y * dstW + x) * 4;
+
+      if (sx < 0 || sx >= srcW - 1 || sy < 0 || sy >= srcH - 1) {
+        // 範囲外は白背景で埋める
+        dstData[dstIdx] = 255;
+        dstData[dstIdx + 1] = 255;
+        dstData[dstIdx + 2] = 255;
+        dstData[dstIdx + 3] = 255;
+        continue;
+      }
+
+      const x0 = Math.floor(sx);
+      const y0 = Math.floor(sy);
+      const dx = sx - x0;
+      const dy = sy - y0;
+      const w00 = (1 - dx) * (1 - dy);
+      const w10 = dx * (1 - dy);
+      const w01 = (1 - dx) * dy;
+      const w11 = dx * dy;
+
+      const idx00 = (y0 * srcW + x0) * 4;
+      const idx10 = idx00 + 4;
+      const idx01 = idx00 + srcW * 4;
+      const idx11 = idx01 + 4;
+
+      dstData[dstIdx] = Math.round(
+        srcData[idx00] * w00 + srcData[idx10] * w10 + srcData[idx01] * w01 + srcData[idx11] * w11
+      );
+      dstData[dstIdx + 1] = Math.round(
+        srcData[idx00 + 1] * w00 + srcData[idx10 + 1] * w10 + srcData[idx01 + 1] * w01 + srcData[idx11 + 1] * w11
+      );
+      dstData[dstIdx + 2] = Math.round(
+        srcData[idx00 + 2] * w00 + srcData[idx10 + 2] * w10 + srcData[idx01 + 2] * w01 + srcData[idx11 + 2] * w11
+      );
+      dstData[dstIdx + 3] = 255;
+    }
+  }
+
+  outCtx.putImageData(outImgData, 0, 0);
+  return outCanvas;
+}
+
+/**
+ * 斜め（傾き・90度回転）＋ 台形歪み補正 ＋ 上下左右切り取りを一括適用する
+ */
+export async function transformAndCropReceiptImage(
+  imageSrc: string,
+  insets: { top: number; bottom: number; left: number; right: number },
+  perspective?: Partial<PerspectiveOptions>
+): Promise<string> {
+  const angleDeg = Number(perspective?.angleDeg) || 0;
+  const rotate90 = ((Number(perspective?.rotate90) || 0) % 360 + 360) % 360;
+  const keystoneV = Math.max(-50, Math.min(50, Number(perspective?.keystoneV) || 0));
+  const keystoneH = Math.max(-50, Math.min(50, Number(perspective?.keystoneH) || 0));
+
+  const hasTransform = angleDeg !== 0 || rotate90 !== 0 || keystoneV !== 0 || keystoneH !== 0;
+  if (!hasTransform) {
+    return cropImageWithInsets(imageSrc, insets);
+  }
+
+  try {
+    const img = await loadImage(imageSrc);
+    let w = img.naturalWidth || img.width;
+    let h = img.naturalHeight || img.height;
+    if (!w || !h) return imageSrc;
+
+    // 高速かつ高精細に処理するため長辺最大 1400px に制限
+    const maxDim = 1400;
+    if (Math.max(w, h) > maxDim) {
+      const scale = maxDim / Math.max(w, h);
+      w = Math.round(w * scale);
+      h = Math.round(h * scale);
+    }
+
+    // 1. 90度単位の回転 + 微小傾き回転（angleDeg）の適用
+    const swapWH = rotate90 === 90 || rotate90 === 270;
+    const baseW = swapWH ? h : w;
+    const baseH = swapWH ? w : h;
+
+    const rotCanvas = document.createElement('canvas');
+    rotCanvas.width = baseW;
+    rotCanvas.height = baseH;
+    const rotCtx = rotCanvas.getContext('2d');
+    if (!rotCtx) return imageSrc;
+
+    rotCtx.fillStyle = '#ffffff';
+    rotCtx.fillRect(0, 0, baseW, baseH);
+    rotCtx.save();
+    rotCtx.translate(baseW / 2, baseH / 2);
+    const totalRad = ((rotate90 + angleDeg) * Math.PI) / 180;
+    rotCtx.rotate(totalRad);
+    rotCtx.drawImage(img, -w / 2, -h / 2, w, h);
+    rotCtx.restore();
+
+    // 2. 台形補正（keystoneV / keystoneH）
+    // keystoneV > 0: 斜め上から撮って「上辺が狭く、下辺が広い」レシートの上辺を引き伸ばして真っ直ぐにする
+    //                （＝元画像の台形領域 [上辺が内側、下辺が外側] を矩形に引き伸ばす）
+    let workCanvas = rotCanvas;
+    if (keystoneV !== 0 || keystoneH !== 0) {
+      const kv = (keystoneV / 100) * 0.45; // 最大22.5%の内側絞り
+      const kh = (keystoneH / 100) * 0.45;
+
+      const topInsetX = kv > 0 ? baseW * kv : 0;
+      const bottomInsetX = kv < 0 ? baseW * (-kv) : 0;
+      const leftInsetY = kh > 0 ? baseH * kh : 0;
+      const rightInsetY = kh < 0 ? baseH * (-kh) : 0;
+
+      const quad: [
+        { x: number; y: number },
+        { x: number; y: number },
+        { x: number; y: number },
+        { x: number; y: number }
+      ] = [
+        { x: topInsetX, y: leftInsetY },
+        { x: baseW - 1 - topInsetX, y: rightInsetY },
+        { x: baseW - 1 - bottomInsetX, y: baseH - 1 - rightInsetY },
+        { x: bottomInsetX, y: baseH - 1 - leftInsetY }
+      ];
+
+      workCanvas = warpPerspectiveQuadToRect(rotCanvas, quad, baseW, baseH);
+    }
+
+    const transformedUrl = workCanvas.toDataURL('image/jpeg', 0.92);
+    return cropImageWithInsets(transformedUrl, insets);
+  } catch (err) {
+    console.warn('台形・傾き補正エラー:', err);
+    return cropImageWithInsets(imageSrc, insets);
+  }
+}
+
+/**
+ * レシート画像の四隅・左右端を自動検出し、「斜め傾き（角度）」と「台形歪み（上下の幅の差）」を
+ * ワンタップで自動計測して真っ直ぐな長方形に自動補正する
+ */
+export async function autoDeskewAndPerspective(imageSrc: string): Promise<{
+  correctedDataUrl: string;
+  detectedAngleDeg: number;
+  detectedKeystoneV: number;
+}> {
+  try {
+    const img = await loadImage(imageSrc);
+    const origW = img.naturalWidth || img.width;
+    const origH = img.naturalHeight || img.height;
+    if (origW < 80 || origH < 80) {
+      return { correctedDataUrl: imageSrc, detectedAngleDeg: 0, detectedKeystoneV: 0 };
+    }
+
+    // 解析用縮小キャンバス
+    const maxDim = 500;
+    const scale = Math.min(1, maxDim / Math.max(origW, origH));
+    const scanW = Math.max(1, Math.round(origW * scale));
+    const scanH = Math.max(1, Math.round(origH * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = scanW;
+    canvas.height = scanH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return { correctedDataUrl: imageSrc, detectedAngleDeg: 0, detectedKeystoneV: 0 };
+
+    ctx.drawImage(img, 0, 0, scanW, scanH);
+    const data = ctx.getImageData(0, 0, scanW, scanH).data;
+
+    // 中央領域の紙の明るさと外周背景の明るさを取得
+    const centerBr: number[] = [];
+    for (let y = Math.floor(scanH * 0.25); y < Math.ceil(scanH * 0.75); y += 3) {
+      for (let x = Math.floor(scanW * 0.25); x < Math.ceil(scanW * 0.75); x += 3) {
+        const i = (y * scanW + x) * 4;
+        centerBr.push((data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000);
+      }
+    }
+    centerBr.sort((a, b) => a - b);
+    const paperBr = centerBr.length > 0 ? centerBr[Math.floor(centerBr.length * 0.75)] : 200;
+
+    let bgBrSum = 0;
+    let bgCnt = 0;
+    for (let y = 0; y < scanH; y += 3) {
+      for (const x of [1, 2, scanW - 3, scanW - 2]) {
+        const i = (y * scanW + x) * 4;
+        bgBrSum += (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+        bgCnt++;
+      }
+    }
+    const bgBr = bgCnt > 0 ? bgBrSum / bgCnt : 90;
+    const threshold = Math.max(140, Math.min(220, bgBr + (paperBr - bgBr) * 0.55));
+
+    // 各行 y ごとのレシート紙の左端 leftX(y) と右端 rightX(y) を検出
+    const rowEdges: { y: number; leftX: number; rightX: number; width: number; centerX: number }[] = [];
+
+    for (let y = Math.floor(scanH * 0.12); y < Math.ceil(scanH * 0.88); y += 2) {
+      let lx = -1;
+      let rx = -1;
+      for (let x = 2; x < scanW - 2; x++) {
+        const i = (y * scanW + x) * 4;
+        const br = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+        const maxC = Math.max(data[i], data[i + 1], data[i + 2]);
+        const minC = Math.min(data[i], data[i + 1], data[i + 2]);
+        const sat = maxC === 0 ? 0 : (maxC - minC) / maxC;
+        if (br >= threshold && sat < 0.32) {
+          lx = x;
+          break;
+        }
+      }
+      for (let x = scanW - 3; x >= 2; x--) {
+        const i = (y * scanW + x) * 4;
+        const br = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+        const maxC = Math.max(data[i], data[i + 1], data[i + 2]);
+        const minC = Math.min(data[i], data[i + 1], data[i + 2]);
+        const sat = maxC === 0 ? 0 : (maxC - minC) / maxC;
+        if (br >= threshold && sat < 0.32) {
+          rx = x;
+          break;
+        }
+      }
+
+      if (lx >= 0 && rx > lx + scanW * 0.18) {
+        rowEdges.push({
+          y,
+          leftX: lx,
+          rightX: rx,
+          width: rx - lx,
+          centerX: (lx + rx) / 2
+        });
+      }
+    }
+
+    if (rowEdges.length < 8) {
+      const tight = await autoTightCrop(imageSrc);
+      return { correctedDataUrl: tight, detectedAngleDeg: 0, detectedKeystoneV: 0 };
+    }
+
+    // 上部1/3と下部1/3の平均中心Xと平均幅を比較して、傾き角度と台形歪み量を算出
+    const third = Math.max(3, Math.floor(rowEdges.length / 3));
+    const topRows = rowEdges.slice(0, third);
+    const bottomRows = rowEdges.slice(rowEdges.length - third);
+
+    const avg = (arr: number[]) => arr.reduce((s, v) => s + v, 0) / arr.length;
+    const topY = avg(topRows.map((r) => r.y));
+    const bottomY = avg(bottomRows.map((r) => r.y));
+    const topCenterX = avg(topRows.map((r) => r.centerX));
+    const bottomCenterX = avg(bottomRows.map((r) => r.centerX));
+    const topWidth = avg(topRows.map((r) => r.width));
+    const bottomWidth = avg(bottomRows.map((r) => r.width));
+
+    const dy = Math.max(10, bottomY - topY);
+    const dxCenter = bottomCenterX - topCenterX;
+
+    // 中心線の傾き角度（度）：反時計回りに戻す角度
+    let detectedAngleDeg = Math.round(((Math.atan2(dxCenter, dy) * 180) / Math.PI) * 2) / 2;
+    if (Math.abs(detectedAngleDeg) < 0.6 || Math.abs(detectedAngleDeg) > 25) {
+      detectedAngleDeg = 0;
+    }
+
+    // 上下の幅の比率から台形補正量（keystoneV: -40 〜 +40）を算出
+    // bottomWidth > topWidth なら上辺が狭い（斜め上から撮影） -> keystoneV > 0
+    const widthDiffRatio = (bottomWidth - topWidth) / Math.max(topWidth, bottomWidth, 1);
+    let detectedKeystoneV = Math.round((widthDiffRatio / 0.45) * 50);
+    if (Math.abs(detectedKeystoneV) < 3) {
+      detectedKeystoneV = 0;
+    }
+    detectedKeystoneV = Math.max(-40, Math.min(40, detectedKeystoneV));
+
+    // 傾き・台形を補正した上で余白も自動トリミング
+    const warped = await transformAndCropReceiptImage(
+      imageSrc,
+      { top: 0, bottom: 0, left: 0, right: 0 },
+      { angleDeg: detectedAngleDeg, rotate90: 0, keystoneV: detectedKeystoneV, keystoneH: 0 }
+    );
+    const tightened = await autoTightCrop(warped);
+
+    return {
+      correctedDataUrl: tightened,
+      detectedAngleDeg,
+      detectedKeystoneV
+    };
+  } catch (err) {
+    console.warn('自動斜め・台形補正エラー:', err);
+    return { correctedDataUrl: imageSrc, detectedAngleDeg: 0, detectedKeystoneV: 0 };
+  }
+}
+
