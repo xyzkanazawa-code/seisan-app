@@ -145,20 +145,48 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     }
   };
 
-  // シャッターを切って撮影
+  // シャッターを切って撮影（選択中のガイド枠 frameShape に合わせて外側の余計な余白を最初からカット）
   const captureCurrentFrame = (): string | null => {
     if (!videoRef.current) return null;
     const video = videoRef.current;
     if (video.videoWidth === 0 || video.videoHeight === 0) return null;
 
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+
+    // ガイド枠に応じたクロップ領域（少しだけ安全マージンを持たせて枠内のレシートが切れないようにする）
+    let topPct = 0;
+    let bottomPct = 1;
+    let leftPct = 0;
+    let rightPct = 1;
+
+    if (frameShape === 'tall') {
+      // 縦長レシート枠 (top: 6%, bottom: 10%, left: 16%, right: 16%) -> 安全マージン込み
+      topPct = 0.03;
+      bottomPct = 0.94;
+      leftPct = 0.10;
+      rightPct = 0.90;
+    } else if (frameShape === 'wide') {
+      // 横長・ETC枠 (top: 25%, bottom: 25%, left: 6%, right: 6%) -> 上下の広大な背景を最初からカット
+      topPct = 0.18;
+      bottomPct = 0.82;
+      leftPct = 0.03;
+      rightPct = 0.97;
+    }
+
+    const sx = Math.round(vw * leftPct);
+    const sy = Math.round(vh * topPct);
+    const sw = Math.max(100, Math.round(vw * (rightPct - leftPct)));
+    const sh = Math.max(100, Math.round(vh * (bottomPct - topPct)));
+
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    canvas.width = sw;
+    canvas.height = sh;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.9);
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+    return canvas.toDataURL('image/jpeg', 0.92);
   };
 
   const handleShutter = () => {

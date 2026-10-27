@@ -83,6 +83,16 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
     }
   };
 
+  // 今のスライダー切り取りをベース画像に適用し、スライダーを0%に戻してさらに追いカットできるようにする
+  const handleApplyAndContinue = () => {
+    if (!previewImage) return;
+    setBaseImage(previewImage);
+    setTopInset(0);
+    setBottomInset(0);
+    setLeftInset(0);
+    setRightInset(0);
+  };
+
   // リセット
   const handleReset = () => {
     setBaseImage(imageUrl);
@@ -289,13 +299,33 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
               border: '1px solid rgba(255, 255, 255, 0.08)'
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
               <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#e2e8f0' }}>
-                余白カットの手動微調整（スライダーで上下左右をカット）
+                余白カットの手動調整（最大85%まで大幅に切り取り可能）
               </span>
-              <span style={{ fontSize: '0.72rem', color: '#38bdf8' }}>
-                ※動かすと即座に切り取られます
-              </span>
+              {(topInset > 0 || bottomInset > 0 || leftInset > 0 || rightInset > 0) && (
+                <button
+                  type="button"
+                  onClick={handleApplyAndContinue}
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: 6,
+                    fontSize: '0.73rem',
+                    fontWeight: 800,
+                    background: 'rgba(16, 185, 129, 0.22)',
+                    color: '#6ee7b7',
+                    border: '1px solid rgba(16, 185, 129, 0.45)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4
+                  }}
+                  title="現在の切り取りを適用してスライダーを0%に戻し、さらに細かく追いカットします"
+                >
+                  <Scissors size={12} />
+                  <span>今の位置で切ってさらに追いカット</span>
+                </button>
+              )}
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px' }}>
@@ -308,7 +338,7 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
                 <input
                   type="range"
                   min="0"
-                  max="45"
+                  max={Math.min(85, 92 - bottomInset)}
                   value={topInset}
                   onChange={(e) => setTopInset(Number(e.target.value))}
                   style={{ width: '100%', accentColor: '#38bdf8', cursor: 'pointer' }}
@@ -324,7 +354,7 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
                 <input
                   type="range"
                   min="0"
-                  max="45"
+                  max={Math.min(85, 92 - topInset)}
                   value={bottomInset}
                   onChange={(e) => setBottomInset(Number(e.target.value))}
                   style={{ width: '100%', accentColor: '#38bdf8', cursor: 'pointer' }}
@@ -340,7 +370,7 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
                 <input
                   type="range"
                   min="0"
-                  max="45"
+                  max={Math.min(85, 92 - rightInset)}
                   value={leftInset}
                   onChange={(e) => setLeftInset(Number(e.target.value))}
                   style={{ width: '100%', accentColor: '#38bdf8', cursor: 'pointer' }}
@@ -356,7 +386,7 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
                 <input
                   type="range"
                   min="0"
-                  max="45"
+                  max={Math.min(85, 92 - leftInset)}
                   value={rightInset}
                   onChange={(e) => setRightInset(Number(e.target.value))}
                   style={{ width: '100%', accentColor: '#38bdf8', cursor: 'pointer' }}
@@ -364,23 +394,25 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
               </div>
             </div>
 
-            {/* クイック均等カットボタン */}
-            <div style={{ display: 'flex', gap: 6, paddingTop: 6, borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
+            {/* クイックカットボタン */}
+            <div style={{ display: 'flex', gap: 6, paddingTop: 6, borderTop: '1px solid rgba(255, 255, 255, 0.06)', flexWrap: 'wrap' }}>
               <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', alignSelf: 'center' }}>クイック指定:</span>
               {[
-                { label: '周囲5%', val: 5 },
-                { label: '周囲10%', val: 10 },
-                { label: '周囲15%', val: 15 },
-                { label: 'リセット', val: 0 }
+                { label: '周囲10%', top: 10, bottom: 10, left: 10, right: 10 },
+                { label: '周囲20%', top: 20, bottom: 20, left: 20, right: 20 },
+                { label: '上下30%カット', top: 30, bottom: 30, left: 5, right: 5 },
+                { label: '下半分カット', top: 0, bottom: 55, left: 0, right: 0 },
+                { label: '上半分カット', top: 55, bottom: 0, left: 0, right: 0 },
+                { label: '0に戻す', top: 0, bottom: 0, left: 0, right: 0 }
               ].map((btn) => (
                 <button
                   key={btn.label}
                   type="button"
                   onClick={() => {
-                    setTopInset(btn.val);
-                    setBottomInset(btn.val);
-                    setLeftInset(btn.val);
-                    setRightInset(btn.val);
+                    setTopInset(btn.top);
+                    setBottomInset(btn.bottom);
+                    setLeftInset(btn.left);
+                    setRightInset(btn.right);
                   }}
                   style={{
                     padding: '3px 8px',

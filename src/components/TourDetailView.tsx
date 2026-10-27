@@ -436,9 +436,16 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
             <span style={{ color: '#cbd5e1' }}>
               回送計: <strong style={{ color: '#f59e0b', fontFamily: 'var(--font-num)' }}>¥{summary.etcKaiso.toLocaleString()}</strong>
             </span>
-            {summary.etcGuidePaid > 0 && (
+            <span style={{ color: '#e2e8f0' }}>
+              ETC総計: <strong style={{ color: '#ffffff', fontFamily: 'var(--font-num)' }}>¥{summary.categoryTotals.etc.toLocaleString()}</strong>
+            </span>
+            {summary.etcGuidePaid > 0 ? (
               <span style={{ color: '#c084fc', fontWeight: 700 }}>
-                (うちガイド預り金精算: ¥{summary.etcGuidePaid.toLocaleString()})
+                (うち預り金から引く: ¥{summary.etcGuidePaid.toLocaleString()} ／ 会社ETC: ¥{summary.etcCompany.toLocaleString()})
+              </span>
+            ) : (
+              <span style={{ color: '#6ee7b7', fontSize: '0.76rem' }}>
+                (すべて会社ETC精算・仮払金から引かない)
               </span>
             )}
           </div>

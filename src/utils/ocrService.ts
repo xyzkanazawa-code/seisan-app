@@ -710,8 +710,9 @@ export async function parseAndSplitEtcReceipt(
   fullText: string,
   imageSrc: string
 ): Promise<ParsedReceiptItem[] | null> {
-  // ETCの区切りキーワード（御利用書、利用証明書、通行料金、ETC利用など）を検出
-  const delimiterRegex = /(?:御利用書|利用証明書|ETC利用|通行料金|ETC明細)/g;
+  // ETCの1枚ごとの開始キーワード（「御利用書」「利用証明書」「ETC利用明細書」などのヘッダー）を検出
+  // ※「通行料金」や「ETC利用」は1枚の証明書の中に「通行料金 ¥1,500」「ETC利用」として両方印字されるため、区切り文字にすると1枚が2〜3枚に分裂して金額が重複計上されてしまうため除外！
+  const delimiterRegex = /(?:E\s*T\s*C\s*利用証明書|御\s*利\s*用\s*書|利\s*用\s*証\s*明\s*書|E\s*T\s*C\s*利用明細書)/g;
   const matches = [...fullText.matchAll(delimiterRegex)];
 
   if (matches.length <= 1) {
@@ -719,13 +720,24 @@ export async function parseAndSplitEtcReceipt(
     return null;
   }
 
-  const sectionsCount = matches.length;
+  // テキストをヘッダー位置から分割（最初のヘッダーより前のノイズは無視し、各ヘッダー以降のブロックを抽出）
+  const textSections: string[] = [];
+  for (let i = 0; i < matches.length; i++) {
+    const startIdx = matches[i].index ?? 0;
+    const endIdx = i + 1 < matches.length ? (matches[i + 1].index ?? fullText.length) : fullText.length;
+    const chunk = fullText.slice(startIdx, endIdx).trim();
+    if (chunk.length >= 10) {
+      textSections.push(chunk);
+    }
+  }
+
+  if (textSections.length <= 1) {
+    return null;
+  }
+
+  const sectionsCount = textSections.length;
   // 各セクションの画像をクロップ
   const slicedImages = await sliceEtcReceipt(imageSrc, sectionsCount);
-
-  // テキストを分割
-  const rawSections = fullText.split(/(?:御利用書|利用証明書|ETC利用|通行料金|ETC明細)/);
-  const textSections = rawSections.filter((s) => s.trim().length > 0);
 
   const results: ParsedReceiptItem[] = [];
 

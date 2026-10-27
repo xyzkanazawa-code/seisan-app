@@ -78,7 +78,11 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
       .toArray()
       .then((existing) => {
         const advanceSpent = existing
-          .filter((r) => r.paymentMethod === 'advance')
+          .filter((r) =>
+            r.category === 'etc'
+              ? Boolean(r.etcPaidByGuide)
+              : r.paymentMethod === 'advance'
+          )
           .reduce((sum, r) => sum + r.amount, 0);
         const tourAdvance = activeTour.advancePayment || 0;
         let remainingAdvance = Math.max(0, tourAdvance - advanceSpent);

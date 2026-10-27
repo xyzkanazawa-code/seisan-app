@@ -466,11 +466,41 @@ export async function cropReceiptRegions(imageSrc: string): Promise<string[]> {
       return a.x - b.x;
     });
 
-    // 8. 各レシート枠を元画像からクロップ（余白を最小限の1.5%にしてタイトに切り出す）
+    // 8. ほぼ同じY座標帯（1枚の長いETC明細やレシートが文字や折り目で上下or左右に細切れになったケース）や、
+    //    全体面積の8%未満しかない小さなノイズ断片を除去し、本来のレシート領域に統合する
+    const significantBoxes = mergedBoxes.filter((b) => b.width * b.height >= totalPixels * 0.04);
+    const targetBoxes = significantBoxes.length > 0 ? significantBoxes : mergedBoxes;
+
+    // もし複数ボックスが検出されたが、X方向が大きく重なっていて縦に並んでいる場合（1枚のレシートが上下に分断された場合）は1つに結合する
+    const consolidatedBoxes: BoundingBox[] = [];
+    for (const box of targetBoxes) {
+      let combined = false;
+      for (let i = 0; i < consolidatedBoxes.length; i++) {
+        const c = consolidatedBoxes[i];
+        const overlapX = Math.max(0, Math.min(box.x + box.width, c.x + c.width) - Math.max(box.x, c.x));
+        const minW = Math.min(box.width, c.width);
+        const verticalGap = Math.max(box.y - (c.y + c.height), c.y - (box.y + box.height));
+        // 横幅の50%以上が重なり、縦の隙間が画面高の12%以内なら同一レシートとみなして結合
+        if (overlapX >= minW * 0.5 && verticalGap <= scanH * 0.12) {
+          const nx = Math.min(box.x, c.x);
+          const ny = Math.min(box.y, c.y);
+          const nr = Math.max(box.x + box.width, c.x + c.width);
+          const nb = Math.max(box.y + box.height, c.y + c.height);
+          consolidatedBoxes[i] = { x: nx, y: ny, width: nr - nx, height: nb - ny };
+          combined = true;
+          break;
+        }
+      }
+      if (!combined) {
+        consolidatedBoxes.push(box);
+      }
+    }
+
+    // 9. 各レシート枠を元画像からクロップ（余白を最小限の1.5%にしてタイトに切り出す）
     const croppedResults: string[] = [];
     const invScale = 1 / scale;
 
-    for (const box of mergedBoxes) {
+    for (const box of consolidatedBoxes) {
       // 余分な机や背景が入らないよう最小限のマージン（1.5%）
       const padX = Math.round(box.width * 0.015);
       const padY = Math.round(box.height * 0.015);
@@ -505,16 +535,16 @@ export async function cropReceiptRegions(imageSrc: string): Promise<string[]> {
 }
 
 /**
- * レシート・領収書画像の周囲にある余分な背景余白（机、影、マットなど）を自動検出し、
+ * レシート・領収書画像の周囲にある余分な背景余白（机、影、マット、黒い台など）を自動検出し、
  * レシート紙本体の縁（エッジ）に合わせてタイトにトリミングする
  */
 export async function autoTightCrop(imageSrc: string): Promise<string> {
   try {
     const img = await loadImage(imageSrc);
-    const origW = img.width;
-    const origH = img.height;
+    const origW = img.naturalWidth || img.width;
+    const origH = img.naturalHeight || img.height;
 
-    if (origW < 80 || origH < 80) return imageSrc;
+    if (origW < 60 || origH < 60) return imageSrc;
 
     // 解析用キャンバス（長辺最大 600px に適応リサイズして高速・安定検出）
     const maxDim = 600;
@@ -532,31 +562,51 @@ export async function autoTightCrop(imageSrc: string): Promise<string> {
     const imgData = ctx.getImageData(0, 0, scanW, scanH);
     const data = imgData.data;
 
-    // 1. 画像外周（四隅）の背景色サンプリング
-    // 左上・右上・左下・右下の周辺サンプルから背景輝度・色味を推定
-    const cornerSize = Math.max(4, Math.min(18, Math.floor(Math.min(scanW, scanH) * 0.06)));
-    let cornerBrightnessSum = 0;
-    let cornerCount = 0;
+    // 1. 中央領域（レシート紙が確実に存在するエリア）の輝度分布をサンプリングし、
+    //    照明グラデーションに惑わされない「レシート紙の白さ（上位輝度）」と「外周背景の輝度」を比較する
+    const centerBrList: number[] = [];
+    const cyStart = Math.floor(scanH * 0.2);
+    const cyEnd = Math.ceil(scanH * 0.8);
+    const cxStart = Math.floor(scanW * 0.2);
+    const cxEnd = Math.ceil(scanW * 0.8);
 
-    for (let y = 0; y < cornerSize; y++) {
-      for (let x = 0; x < cornerSize; x++) {
-        const corners = [
-          y * scanW + x,
-          y * scanW + (scanW - 1 - x),
-          (scanH - 1 - y) * scanW + x,
-          (scanH - 1 - y) * scanW + (scanW - 1 - x)
-        ];
-        for (const idx of corners) {
-          const pi = idx * 4;
-          const br = (data[pi] * 299 + data[pi + 1] * 587 + data[pi + 2] * 114) / 1000;
-          cornerBrightnessSum += br;
-          cornerCount++;
+    for (let y = cyStart; y < cyEnd; y += 2) {
+      for (let x = cxStart; x < cxEnd; x += 2) {
+        const i = (y * scanW + x) * 4;
+        const br = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+        centerBrList.push(br);
+      }
+    }
+    centerBrList.sort((a, b) => a - b);
+    // レシート紙の代表的な明るさ（中央領域の75パーセンタイル）
+    const paperBrightness =
+      centerBrList.length > 0 ? centerBrList[Math.floor(centerBrList.length * 0.75)] : 200;
+
+    // 外周縁（上下左右の端3%）の平均輝度・彩度を計算
+    let borderBrSum = 0;
+    let borderCount = 0;
+    const edgeBandX = Math.max(2, Math.floor(scanW * 0.04));
+    const edgeBandY = Math.max(2, Math.floor(scanH * 0.04));
+
+    for (let y = 0; y < scanH; y += 2) {
+      for (let x = 0; x < scanW; x += 2) {
+        if (x < edgeBandX || x >= scanW - edgeBandX || y < edgeBandY || y >= scanH - edgeBandY) {
+          const i = (y * scanW + x) * 4;
+          const br = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+          borderBrSum += br;
+          borderCount++;
         }
       }
     }
-    const bgBrightness = cornerCount > 0 ? cornerBrightnessSum / cornerCount : 100;
+    const bgBrightness = borderCount > 0 ? borderBrSum / borderCount : 90;
 
-    // 2. ピクセルごとの「レシート紙・印字らしさ（前景スコア）」の判定
+    // レシート紙と背景の中間閾値（カメラの周辺減光や机のグラデーションでも背景を紙と誤認しないよう高めに設定）
+    const adaptiveWhiteThreshold = Math.max(
+      145,
+      Math.min(225, bgBrightness + (paperBrightness - bgBrightness) * 0.58)
+    );
+
+    // 2. ピクセルごとの「レシート紙らしさ」の判定
     const isForeground = new Uint8Array(scanW * scanH);
     for (let y = 0; y < scanH; y++) {
       for (let x = 0; x < scanW; x++) {
@@ -569,66 +619,74 @@ export async function autoTightCrop(imageSrc: string): Promise<string> {
         const minC = Math.min(r, g, b);
         const saturation = maxC === 0 ? 0 : (maxC - minC) / maxC;
 
-        // 背景との輝度差、または白紙特徴（高輝度 & 低彩度）
-        const diffFromBg = Math.abs(br - bgBrightness);
-        const isPaperWhite = br > 140 && saturation < 0.38;
-        const isSignificantlyDifferent = diffFromBg > 28;
-
-        if (isPaperWhite || isSignificantlyDifferent) {
+        // 木目机・茶色や青のマット（高彩度）を除外し、白い感熱紙・領収書用紙（高輝度＆低彩度）を検出
+        const isPaper = br >= adaptiveWhiteThreshold && saturation < 0.32;
+        if (isPaper) {
           isForeground[y * scanW + x] = 1;
         }
       }
     }
 
-    // 3. 上下左右からの走査（行・列ごとの前景占有率のチェック）
-    // 各行（列）に前景ピクセルが 10% 以上現れ始めた位置をエッジとする
-    const thresholdRatio = 0.10;
-    const reqPixelsX = Math.max(4, Math.round(scanW * thresholdRatio));
-    const reqPixelsY = Math.max(4, Math.round(scanH * thresholdRatio));
+    // 3. 上下左右からの走査（行・列ごとの紙ピクセル占有率チェック）
+    // ノイズに反応しないよう、連続した行/列で 15% 以上の紙ピクセルが現れる位置をレシート端とする
+    const thresholdRatio = 0.15;
+    const reqPixelsX = Math.max(6, Math.round(scanW * thresholdRatio));
 
     let top = 0;
-    for (let y = 0; y < scanH; y++) {
+    for (let y = 0; y < scanH - 2; y++) {
       let count = 0;
+      let countNext = 0;
       for (let x = 0; x < scanW; x++) {
         if (isForeground[y * scanW + x] === 1) count++;
+        if (isForeground[(y + 1) * scanW + x] === 1) countNext++;
       }
-      if (count >= reqPixelsX) {
+      if (count >= reqPixelsX && countNext >= reqPixelsX) {
         top = y;
         break;
       }
     }
 
     let bottom = scanH - 1;
-    for (let y = scanH - 1; y >= 0; y--) {
+    for (let y = scanH - 1; y >= 2; y--) {
       let count = 0;
+      let countPrev = 0;
       for (let x = 0; x < scanW; x++) {
         if (isForeground[y * scanW + x] === 1) count++;
+        if (isForeground[(y - 1) * scanW + x] === 1) countPrev++;
       }
-      if (count >= reqPixelsX) {
+      if (count >= reqPixelsX && countPrev >= reqPixelsX) {
         bottom = y;
         break;
       }
     }
 
     let left = 0;
-    for (let x = 0; x < scanW; x++) {
+    for (let x = 0; x < scanW - 2; x++) {
       let count = 0;
-      for (let y = 0; y < scanH; y++) {
+      let countNext = 0;
+      for (let y = top; y <= bottom; y++) {
         if (isForeground[y * scanW + x] === 1) count++;
+        if (isForeground[y * scanW + (x + 1)] === 1) countNext++;
       }
-      if (count >= reqPixelsY) {
+      const spanH = Math.max(1, bottom - top + 1);
+      const reqY = Math.max(6, Math.round(spanH * thresholdRatio));
+      if (count >= reqY && countNext >= reqY) {
         left = x;
         break;
       }
     }
 
     let right = scanW - 1;
-    for (let x = scanW - 1; x >= 0; x--) {
+    for (let x = scanW - 1; x >= 2; x--) {
       let count = 0;
-      for (let y = 0; y < scanH; y++) {
+      let countPrev = 0;
+      for (let y = top; y <= bottom; y++) {
         if (isForeground[y * scanW + x] === 1) count++;
+        if (isForeground[y * scanW + (x - 1)] === 1) countPrev++;
       }
-      if (count >= reqPixelsY) {
+      const spanH = Math.max(1, bottom - top + 1);
+      const reqY = Math.max(6, Math.round(spanH * thresholdRatio));
+      if (count >= reqY && countPrev >= reqY) {
         right = x;
         break;
       }
@@ -638,27 +696,28 @@ export async function autoTightCrop(imageSrc: string): Promise<string> {
     const cropWScan = right - left;
     const cropHScan = bottom - top;
 
-    // もし検出結果が小さすぎる（画面の15%未満）や逆転している場合はトリミングを行わない
-    if (cropWScan < scanW * 0.15 || cropHScan < scanH * 0.15 || cropWScan <= 0 || cropHScan <= 0) {
+    // もし検出結果が小さすぎる（画面の10%未満）や逆転している場合はトリミングを行わない
+    if (cropWScan < scanW * 0.10 || cropHScan < scanH * 0.10 || cropWScan <= 0 || cropHScan <= 0) {
       return imageSrc;
     }
 
-    // もしすでに画面の96%以上を占めているなら微小なので元画像のまま
-    if (cropWScan >= scanW * 0.96 && cropHScan >= scanH * 0.96) {
-      return imageSrc;
+    // もしすでに画面の98%以上を占めている場合でも、手動で「余白を自動カット」を押したときに
+    // 外周の微細なフチ（各辺2.5%）をスッキリ削ぎ落とせるようにする
+    if (cropWScan >= scanW * 0.98 && cropHScan >= scanH * 0.98) {
+      return cropImageWithInsets(imageSrc, { top: 0.025, bottom: 0.025, left: 0.025, right: 0.025 });
     }
 
-    // 5. 元画像座標へ逆変換し、1%の微細な安全マージンを付加
+    // 5. 元画像座標へ逆変換し、0.8%の微細な安全マージンを付加
     const invScale = 1 / scale;
-    const marginX = Math.round(origW * 0.01);
-    const marginY = Math.round(origH * 0.01);
+    const marginX = Math.round(origW * 0.008);
+    const marginY = Math.round(origH * 0.008);
 
     const origCropX = Math.max(0, Math.round(left * invScale) - marginX);
     const origCropY = Math.max(0, Math.round(top * invScale) - marginY);
     const origCropW = Math.min(origW - origCropX, Math.round(cropWScan * invScale) + marginX * 2);
     const origCropH = Math.min(origH - origCropY, Math.round(cropHScan * invScale) + marginY * 2);
 
-    if (origCropW < 80 || origCropH < 80) return imageSrc;
+    if (origCropW < 50 || origCropH < 50) return imageSrc;
 
     // 6. 元画像からタイトに切り出し
     const outCanvas = document.createElement('canvas');
@@ -676,7 +735,8 @@ export async function autoTightCrop(imageSrc: string): Promise<string> {
 }
 
 /**
- * 手動切り取り用：指定した上下左右の切り落とし余白比率（0.0 〜 0.48）で確実にトリミング
+ * 手動切り取り用：指定した上下左右の切り落とし余白比率（0.0 〜 0.88）で確実にトリミング
+ * 上＋下、左＋右の合計が92%を超える場合も安全に比率調整して極小のETC明細や小領収書まで自在に切り取れる
  */
 export async function cropImageWithInsets(
   imageSrc: string,
@@ -689,21 +749,34 @@ export async function cropImageWithInsets(
 
     if (!origW || !origH) return imageSrc;
 
-    const clampInset = (val: number) => Math.max(0, Math.min(0.48, Number(val) || 0));
-    const topPct = clampInset(insets.top);
-    const bottomPct = clampInset(insets.bottom);
-    const leftPct = clampInset(insets.left);
-    const rightPct = clampInset(insets.right);
+    const clampSingle = (val: number) => Math.max(0, Math.min(0.88, Number(val) || 0));
+    let topPct = clampSingle(insets.top);
+    let bottomPct = clampSingle(insets.bottom);
+    let leftPct = clampSingle(insets.left);
+    let rightPct = clampSingle(insets.right);
 
     // 全て0の場合は切り取り不要
     if (topPct === 0 && bottomPct === 0 && leftPct === 0 && rightPct === 0) {
       return imageSrc;
     }
 
+    // 上下の合計が 0.92（残り8%）を超える場合は比率を保ってクランプ
+    const maxTotalCrop = 0.92;
+    if (topPct + bottomPct > maxTotalCrop) {
+      const scaleY = maxTotalCrop / (topPct + bottomPct);
+      topPct *= scaleY;
+      bottomPct *= scaleY;
+    }
+    if (leftPct + rightPct > maxTotalCrop) {
+      const scaleX = maxTotalCrop / (leftPct + rightPct);
+      leftPct *= scaleX;
+      rightPct *= scaleX;
+    }
+
     const cropX = Math.round(origW * leftPct);
     const cropY = Math.round(origH * topPct);
-    const cropW = Math.max(40, Math.round(origW * (1 - leftPct - rightPct)));
-    const cropH = Math.max(40, Math.round(origH * (1 - topPct - bottomPct)));
+    const cropW = Math.max(24, Math.round(origW * (1 - leftPct - rightPct)));
+    const cropH = Math.max(24, Math.round(origH * (1 - topPct - bottomPct)));
 
     const canvas = document.createElement('canvas');
     canvas.width = cropW;

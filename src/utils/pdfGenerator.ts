@@ -675,17 +675,17 @@ export async function renderDailySummarySamplePage(
     }
   ];
 
-  // 高速料金セクション（実車・回送ボタン完全連動）
+  // 高速料金セクション（実車・回送ボタン完全連動 ※現金有料道路(toll)は下の支出セクションで集計するため二重計上を防止）
   const highwayRows: RowDef[] = [
     {
       id: 'highway_actual',
       name: '実車（載有乗客的车）',
-      filter: (r) => (r.category === 'etc' || r.category === 'toll') && r.etcType !== 'kaiso' && !r.memo?.includes('回送')
+      filter: (r) => r.category === 'etc' && r.etcType !== 'kaiso' && !r.memo?.includes('回送')
     },
     {
       id: 'highway_empty',
       name: '回送（空車掉頭）',
-      filter: (r) => (r.category === 'etc' || r.category === 'toll') && (r.etcType === 'kaiso' || !!r.memo?.includes('回送'))
+      filter: (r) => r.category === 'etc' && (r.etcType === 'kaiso' || !!r.memo?.includes('回送'))
     }
   ];
 
@@ -774,7 +774,11 @@ export async function renderDailySummarySamplePage(
     let x = leftX + headerLeftW;
     dateColumns.forEach((col, cIdx) => {
       ctx.strokeRect(x, rowY, colDayW, standardRowH);
-      const val = row.customAmounts ? row.customAmounts(col.key, cIdx) : '';
+      const val = row.customAmounts
+        ? row.customAmounts(col.key, cIdx)
+        : row.filter
+        ? getAmount(row.filter, col.key)
+        : '';
       if (typeof val === 'number' && val > 0) {
         ctx.textAlign = 'right';
         ctx.font = 'bold 14px "Plus Jakarta Sans", sans-serif';
@@ -786,7 +790,11 @@ export async function renderDailySummarySamplePage(
 
     // 小計列
     ctx.strokeRect(x, rowY, colSubW, standardRowH);
-    const subVal = row.customSubtotal ? row.customSubtotal() : 0;
+    const subVal = row.customSubtotal
+      ? row.customSubtotal()
+      : row.filter
+      ? getSubtotal(row.filter)
+      : 0;
     if (typeof subVal === 'number' && subVal > 0) {
       ctx.textAlign = 'right';
       ctx.font = 'bold 14px "Plus Jakarta Sans", sans-serif';

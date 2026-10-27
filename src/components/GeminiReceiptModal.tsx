@@ -26,6 +26,7 @@ import {
 import { sliceImageVerticalSegments } from '../utils/imageProcessor';
 import { getAppConfig } from '../utils/configStorage';
 import { checkReceiptDuplicates, type DuplicateMatch } from '../utils/duplicateChecker';
+import { ImageCropModal } from './ImageCropModal';
 import type { Tour } from '../db';
 
 interface GeminiReceiptModalProps {
@@ -78,6 +79,7 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [duplicates, setDuplicates] = useState<DuplicateMatch[]>([]);
+  const [isCropModalOpen, setIsCropModalOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -114,8 +116,22 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
     setEditTotalAmount(data.totalAmount);
     setEditItems(data.items);
     if (data.category) setEditCategory(data.category);
+    setEditMemo(data.memo || '');
     setEtcType(data.etcType || 'jissha');
-    setEtcPaidByGuide(false);
+    setEtcPaidByGuide(Boolean(data.etcPaidByGuide));
+  };
+
+  // フォームで編集中の内容を resultsList[activeIndex] に常時同期（タブ切替や一括登録で消えないようにする）
+  const updateCurrentEntryResult = (patch: Partial<GeminiReceiptResult>, newImage?: string) => {
+    setResultsList((prev) => {
+      if (activeIndex < 0 || activeIndex >= prev.length) return prev;
+      const next = [...prev];
+      next[activeIndex] = {
+        result: { ...next[activeIndex].result, ...patch },
+        image: newImage ?? next[activeIndex].image
+      };
+      return next;
+    });
   };
 
   // 入力値・解析結果が変わるたびに二重登録チェックを実行
@@ -210,7 +226,9 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
 
   // 品目の追加
   const handleAddItem = () => {
-    setEditItems([...editItems, { name: '', price: 0 }]);
+    const updated = [...editItems, { name: '', price: 0 }];
+    setEditItems(updated);
+    updateCurrentEntryResult({ items: updated });
   };
 
   // 品目の変更
@@ -223,16 +241,24 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
     }
     setEditItems(updated);
 
-    const newTotal = updated.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
-    if (newTotal > 0) {
-      setEditTotalAmount(newTotal);
+    // 金額欄を変更した場合のみ、品目合計が正かつETCでない場合（または合計金額が未入力の場合）に反映
+    if (field === 'price') {
+      const newTotal = updated.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
+      const isEtc = mapAiCategoryToExpenseCategory(editCategory) === 'etc';
+      if (newTotal > 0 && (!isEtc || updated.length === 1)) {
+        setEditTotalAmount(newTotal);
+        updateCurrentEntryResult({ items: updated, totalAmount: newTotal });
+        return;
+      }
     }
+    updateCurrentEntryResult({ items: updated });
   };
 
   // 品目の削除
   const handleRemoveItem = (index: number) => {
     const updated = editItems.filter((_, i) => i !== index);
     setEditItems(updated);
+    updateCurrentEntryResult({ items: updated });
   };
 
   const isCurrentCategoryEtc = mapAiCategoryToExpenseCategory(editCategory) === 'etc';
@@ -303,7 +329,7 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
     }
   };
 
-  // 全て一括登録（複数件分離された場合）
+  // 全て一括登録（複数件分離された場合：各タブで編集した金額・実車/回送・預り金から引く/引かないを完全保持）
   const handleSaveAll = async () => {
     if (resultsList.length === 0 || isSaving) return;
 
@@ -317,19 +343,30 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
     try {
       for (let i = 0; i < resultsList.length; i++) {
         const item = resultsList[i];
+        // 現在開いているタブは最新のstate値を優先、それ以外のタブはresultsListに保存された編集値を参照
+        const isCurrentTab = i === activeIndex;
         const res = item.result;
-        const isEtc = mapAiCategoryToExpenseCategory(res.category) === 'etc';
+        const catStr = isCurrentTab ? editCategory : (res.category || 'ETC');
+        const isEtc = mapAiCategoryToExpenseCategory(catStr) === 'etc';
+        const finalShopName = isCurrentTab ? (editShopName || res.shopName) : res.shopName;
+        const finalDate = isCurrentTab ? (editDate || res.date) : res.date;
+        const finalAmount = isCurrentTab ? (Number(editTotalAmount) || 0) : (Number(res.totalAmount) || 0);
+        const finalItems = isCurrentTab ? editItems : res.items;
+        const finalMemo = isCurrentTab ? editMemo.trim() : (res.memo || '');
+        const finalEtcType = isCurrentTab ? etcType : (res.etcType || 'jissha');
+        const finalEtcPaidByGuide = isCurrentTab ? etcPaidByGuide : Boolean(res.etcPaidByGuide);
 
         await onSaveToExpense({
-          shopName: res.shopName,
-          date: res.date,
-          amount: res.totalAmount,
-          category: res.category || 'ETC',
-          items: res.items,
+          shopName: finalShopName || 'レシート経費',
+          date: finalDate || new Date().toISOString().split('T')[0],
+          amount: finalAmount,
+          category: catStr,
+          items: finalItems,
           receiptImage: item.image,
           invoiceNumber: res.invoiceNumber,
-          etcType: isEtc ? (res.etcType || 'jissha') : undefined,
-          etcPaidByGuide: false,
+          memo: finalMemo || undefined,
+          etcType: isEtc ? finalEtcType : undefined,
+          etcPaidByGuide: isEtc ? finalEtcPaidByGuide : undefined,
           etcDetails: isEtc ? {
             entryGate: res.entryGate,
             exitGate: res.exitGate,
@@ -644,15 +681,19 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                 }}
               >
                 <img
-                  src={selectedImage}
+                  src={currentImage || selectedImage}
                   alt="Receipt"
+                  onClick={() => setIsCropModalOpen(true)}
                   style={{
                     width: '74px',
                     height: '90px',
-                    objectFit: 'cover',
+                    objectFit: 'contain',
+                    background: '#020617',
                     borderRadius: '10px',
-                    border: '1px solid rgba(255, 255, 255, 0.2)'
+                    border: '1px solid rgba(255, 255, 255, 0.2)',
+                    cursor: 'pointer'
                   }}
+                  title="クリックして切り取り調整"
                 />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#f1f5f9' }}>
@@ -661,7 +702,27 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                   <div style={{ fontSize: '0.74rem', color: '#94a3b8', margin: '2px 0 8px' }}>
                     {isAnalyzing ? 'Gemini 1.5 Flash でOCR解析中...' : '解析結果を反映済み'}
                   </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      disabled={isAnalyzing}
+                      onClick={() => setIsCropModalOpen(true)}
+                      style={{
+                        padding: '5px 10px',
+                        borderRadius: '8px',
+                        background: 'rgba(56, 189, 248, 0.2)',
+                        border: '1px solid rgba(56, 189, 248, 0.4)',
+                        color: '#7dd3fc',
+                        fontSize: '0.72rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}
+                    >
+                      <span>✂️ 切り取り調整</span>
+                    </button>
                     <button
                       type="button"
                       disabled={isAnalyzing}
@@ -991,7 +1052,10 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                       <button
                         type="button"
-                        onClick={() => setEtcType('jissha')}
+                        onClick={() => {
+                          setEtcType('jissha');
+                          updateCurrentEntryResult({ etcType: 'jissha' });
+                        }}
                         style={{
                           padding: '10px',
                           borderRadius: '12px',
@@ -1013,7 +1077,10 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
 
                       <button
                         type="button"
-                        onClick={() => setEtcType('kaiso')}
+                        onClick={() => {
+                          setEtcType('kaiso');
+                          updateCurrentEntryResult({ etcType: 'kaiso' });
+                        }}
                         style={{
                           padding: '10px',
                           borderRadius: '12px',
@@ -1043,7 +1110,10 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                       <button
                         type="button"
-                        onClick={() => setEtcPaidByGuide(false)}
+                        onClick={() => {
+                          setEtcPaidByGuide(false);
+                          updateCurrentEntryResult({ etcPaidByGuide: false });
+                        }}
                         style={{
                           padding: '10px',
                           borderRadius: '12px',
@@ -1065,7 +1135,10 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
 
                       <button
                         type="button"
-                        onClick={() => setEtcPaidByGuide(true)}
+                        onClick={() => {
+                          setEtcPaidByGuide(true);
+                          updateCurrentEntryResult({ etcPaidByGuide: true });
+                        }}
                         style={{
                           padding: '10px',
                           borderRadius: '12px',
@@ -1099,7 +1172,10 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                   <input
                     type="text"
                     value={editShopName}
-                    onChange={(e) => setEditShopName(e.target.value)}
+                    onChange={(e) => {
+                      setEditShopName(e.target.value);
+                      updateCurrentEntryResult({ shopName: e.target.value });
+                    }}
                     style={{
                       width: '100%',
                       padding: '8px 10px',
@@ -1122,7 +1198,10 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                   <input
                     type="date"
                     value={editDate}
-                    onChange={(e) => setEditDate(e.target.value)}
+                    onChange={(e) => {
+                      setEditDate(e.target.value);
+                      updateCurrentEntryResult({ date: e.target.value });
+                    }}
                     style={{
                       width: '100%',
                       padding: '8px 10px',
@@ -1146,7 +1225,10 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                   </label>
                   <select
                     value={editCategory}
-                    onChange={(e) => setEditCategory(e.target.value)}
+                    onChange={(e) => {
+                      setEditCategory(e.target.value);
+                      updateCurrentEntryResult({ category: e.target.value });
+                    }}
                     style={{
                       width: '100%',
                       padding: '8px 10px',
@@ -1177,7 +1259,11 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                   <input
                     type="number"
                     value={editTotalAmount}
-                    onChange={(e) => setEditTotalAmount(Number(e.target.value) || 0)}
+                    onChange={(e) => {
+                      const num = Number(e.target.value) || 0;
+                      setEditTotalAmount(num);
+                      updateCurrentEntryResult({ totalAmount: num });
+                    }}
                     style={{
                       width: '100%',
                       padding: '8px 10px',
@@ -1329,7 +1415,10 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                 <textarea
                   rows={2}
                   value={editMemo}
-                  onChange={(e) => setEditMemo(e.target.value)}
+                  onChange={(e) => {
+                    setEditMemo(e.target.value);
+                    updateCurrentEntryResult({ memo: e.target.value });
+                  }}
                   placeholder="例: お客様依頼で迂回ルート利用、駐車場手書き領収書受領など（複数行入力可）"
                   style={{
                     width: '100%',
@@ -1463,6 +1552,22 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
           )}
         </div>
       </div>
+
+      {/* レシート余白・切り取り調整モーダル */}
+      {(currentImage || selectedImage) && (
+        <ImageCropModal
+          isOpen={isCropModalOpen}
+          onClose={() => setIsCropModalOpen(false)}
+          imageUrl={(currentImage || selectedImage)!}
+          onApplyCrop={(croppedUrl) => {
+            if (resultsList.length > 0) {
+              updateCurrentEntryResult({}, croppedUrl);
+            } else {
+              setSelectedImage(croppedUrl);
+            }
+          }}
+        />
+      )}
     </div>
   );
 };
