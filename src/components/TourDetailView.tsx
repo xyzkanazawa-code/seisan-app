@@ -957,12 +957,17 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
                         background: 'rgba(245, 158, 11, 0.14)',
                         border: '1px solid rgba(245, 158, 11, 0.4)',
                         fontSize: '0.73rem',
-                        color: '#fde68a'
+                        color: '#fde68a',
+                        flexWrap: 'wrap'
                       }}
                     >
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontWeight: 700, color: '#fbbf24' }}>
-                        <AlertTriangle size={13} color="#fbbf24" />
-                        ⚠️ 二重登録注意: {dupEntry.reasons.join(' / ')}
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontWeight: 700, color: '#fbbf24', flexWrap: 'wrap' }}>
+                        <AlertTriangle size={13} color="#fbbf24" style={{ flexShrink: 0 }} />
+                        <span>
+                          ⚠️ 二重登録の疑い: {dupEntry.matchedReceipts && dupEntry.matchedReceipts.length > 0
+                            ? dupEntry.matchedReceipts.map((m) => `「${m.place}」(¥${m.amount.toLocaleString()})`).join('、') + ' と重複'
+                            : dupEntry.reasons.join(' / ')}
+                        </span>
                       </span>
                       <button
                         type="button"

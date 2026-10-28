@@ -66,6 +66,19 @@ export function isPlaceSimilar(placeA: string, placeB: string): boolean {
 }
 
 /**
+ * 2つの店舗名が明確に異なっているか判定
+ * （両方に有効な店舗名が入っており、かつ汎用名ではなく、類似もしていない場合）
+ */
+export function isPlaceDistinct(placeA: string, placeB: string): boolean {
+  const normA = normalizePlaceName(placeA);
+  const normB = normalizePlaceName(placeB);
+  if (!normA || !normB) return false;
+  const genericNames = new Set(['経費', 'その他経費', 'レシート経費', '不明', '利用場所不明']);
+  if (genericNames.has(normA) || genericNames.has(normB)) return false;
+  return !isPlaceSimilar(placeA, placeB);
+}
+
+/**
  * 画像DataURLから高速な知覚ハッシュ（8x8 平均ハッシュ aHash）を生成
  * 同じ写真やわずかな再圧縮画像を検知するために使用
  */
@@ -138,8 +151,8 @@ export function getHashDistance(hashA?: string, hashB?: string): number {
 export function evaluateDuplicatePair(
   candidate: DuplicateCheckCandidate,
   existing: Receipt,
-  candidateHash?: string,
-  existingHash?: string
+  _candidateHash?: string,
+  _existingHash?: string
 ): { confidence: DuplicateConfidence; reasons: string[]; isEtc?: boolean } | null {
   // 自分自身との比較はスキップ
   if (candidate.id !== undefined && existing.id !== undefined && String(candidate.id) === String(existing.id)) {
@@ -149,23 +162,14 @@ export function evaluateDuplicatePair(
   const reasons: string[] = [];
   const isEtcPair = candidate.category === 'etc' || existing.category === 'etc';
 
-  // 1. 画像完全一致または知覚ハッシュ一致チェック
+  // 1. 画像完全一致（同一データURL）チェック
   if (
     candidate.imageUrl &&
     (candidate.imageUrl === existing.originalImageUrl ||
       candidate.imageUrl === existing.processedImageUrl)
   ) {
-    // ただし手動入力ダミー画像（サイズが非常に小さい等）の場合は内容も見る
     if (candidate.imageUrl.length > 15000) {
       reasons.push('同一のレシート画像データ');
-      return { confidence: 'exact_image', reasons, isEtc: false };
-    }
-  }
-
-  if (candidateHash && existingHash) {
-    const dist = getHashDistance(candidateHash, existingHash);
-    if (dist <= 3) {
-      reasons.push('レシート画像がほぼ同一');
       return { confidence: 'exact_image', reasons, isEtc: false };
     }
   }
@@ -185,6 +189,7 @@ export function evaluateDuplicatePair(
 
   const isSameDate = Boolean(candidate.date && existing.date && candidate.date === existing.date);
   const placeMatched = isPlaceSimilar(candidate.place, existing.place);
+  const placeDistinct = isPlaceDistinct(candidate.place, existing.place);
 
   const normCandInv = candidate.invoiceNumber?.trim().toUpperCase();
   const normExistInv = existing.invoiceNumber?.trim().toUpperCase();
@@ -193,6 +198,12 @@ export function evaluateDuplicatePair(
   const categoryMatched = Boolean(
     candidate.category && existing.category && candidate.category === existing.category
   );
+
+  // 重要：店舗名が両方に正しく存在し、かつ明確に異なっている場合（例: セブンイレブン vs ENEOSなど）
+  // インボイス番号が一致している異常事態でない限り、同じ金額であっても別レシートとして扱い重複判定しない！
+  if (placeDistinct && !invoiceMatched) {
+    return null;
+  }
 
   // ETCの場合：同じ高速区間（往復等）の利用が多いため、画像が同一でない場合は控えめ扱い（low）
   if (isEtcPair) {
@@ -212,24 +223,22 @@ export function evaluateDuplicatePair(
     return { confidence: 'high', reasons, isEtc: false };
   }
 
-  // 3. 中確度重複 (Medium)（ETC以外）:
-  // パターンA: 同一ツアー内で 利用日一致 + 金額一致 + 科目一致（OCRと手入力で店名表記が異なるケース）
-  if (isSameDate && isSameAmount && categoryMatched) {
-    reasons.push(`同じ日付(${existing.date})・同じ金額(¥${existingAmount.toLocaleString()})・同じ科目の明細が存在`);
-    return { confidence: 'medium', reasons, isEtc: false };
-  }
-
-  // パターンB: 同一ツアー内で 利用日一致 + 金額一致（特に金額が500円以上、または端数のある金額）
-  if (isSameDate && isSameAmount && candidate.tourId === existing.tourId) {
-    reasons.push(`同じ日付(${existing.date})・同じ金額(¥${existingAmount.toLocaleString()})の明細が存在`);
-    return { confidence: 'medium', reasons, isEtc: false };
-  }
-
   // パターンC: 日付が1日違いまたは読み取りズレだが、金額 + 店舗名 + インボイス番号が完全一致
   if (!isSameDate && isSameAmount && placeMatched && invoiceMatched) {
     reasons.push(
-      `金額(¥${existingAmount.toLocaleString()})・店舗名「${existing.place}」・インボイス番号が完全一致（日付のみ相違: ${existing.date}）`
+      `金額(¥${existingAmount.toLocaleString()})・店舗名「${existing.place}」・インボイス番号が完全一致（日付相違: ${existing.date}）`
     );
+    return { confidence: 'medium', reasons, isEtc: false };
+  }
+
+  // 3. 中確度重複 (Medium)（店舗名が空欄・汎用名で特定できない場合のみ）:
+  // 店舗名が特定できない（空文字または「経費」「不明」など）かつ、同一ツアー内で利用日・金額・科目が一致
+  const hasValidPlace = Boolean(
+    candidate.place &&
+    !['経費', 'その他経費', 'レシート経費', '不明', '利用場所不明'].includes(normalizePlaceName(candidate.place))
+  );
+  if (!hasValidPlace && isSameDate && isSameAmount && categoryMatched && candidate.tourId === existing.tourId) {
+    reasons.push(`店舗名不明かつ同じ日付(${existing.date})・金額(¥${existingAmount.toLocaleString()})・科目`);
     return { confidence: 'medium', reasons, isEtc: false };
   }
 
@@ -294,11 +303,20 @@ export async function checkReceiptDuplicates(
   }
 }
 
+export interface TourDuplicateInfo {
+  reasons: string[];
+  matchedWithIds: number[];
+  matchedReceipts: { id: number; place: string; amount: number; date: string }[];
+  isEtcOnly: boolean;
+}
+
 /**
  * ツアー内の登録済みレシート一覧から、互いに重複している可能性があるペア・グループを検出する
  */
-export function findDuplicateGroupsInTour(receipts: Receipt[]): Map<number, { reasons: string[]; matchedWithIds: number[]; isEtcOnly: boolean }> {
-  const duplicateMap = new Map<number, { reasons: string[]; matchedWithIds: number[]; isEtcOnly: boolean }>();
+export function findDuplicateGroupsInTour(
+  receipts: Receipt[]
+): Map<number, TourDuplicateInfo> {
+  const duplicateMap = new Map<number, TourDuplicateInfo>();
 
   for (let i = 0; i < receipts.length; i++) {
     for (let j = i + 1; j < receipts.length; j++) {
@@ -337,9 +355,20 @@ export function findDuplicateGroupsInTour(receipts: Receipt[]): Map<number, { re
       if (evalResult) {
         const isEtc = Boolean(evalResult.isEtc);
 
-        const prevA = duplicateMap.get(rA.id) || { reasons: [], matchedWithIds: [], isEtcOnly: true };
+        const prevA = duplicateMap.get(rA.id) || {
+          reasons: [],
+          matchedWithIds: [],
+          matchedReceipts: [],
+          isEtcOnly: true
+        };
         if (!prevA.matchedWithIds.includes(rB.id)) {
           prevA.matchedWithIds.push(rB.id);
+          prevA.matchedReceipts.push({
+            id: rB.id,
+            place: rB.place || '名称なし',
+            amount: rB.amount,
+            date: rB.date
+          });
         }
         for (const reason of evalResult.reasons) {
           if (!prevA.reasons.includes(reason)) prevA.reasons.push(reason);
@@ -347,9 +376,20 @@ export function findDuplicateGroupsInTour(receipts: Receipt[]): Map<number, { re
         if (!isEtc) prevA.isEtcOnly = false;
         duplicateMap.set(rA.id, prevA);
 
-        const prevB = duplicateMap.get(rB.id) || { reasons: [], matchedWithIds: [], isEtcOnly: true };
+        const prevB = duplicateMap.get(rB.id) || {
+          reasons: [],
+          matchedWithIds: [],
+          matchedReceipts: [],
+          isEtcOnly: true
+        };
         if (!prevB.matchedWithIds.includes(rA.id)) {
           prevB.matchedWithIds.push(rA.id);
+          prevB.matchedReceipts.push({
+            id: rA.id,
+            place: rA.place || '名称なし',
+            amount: rA.amount,
+            date: rA.date
+          });
         }
         for (const reason of evalResult.reasons) {
           if (!prevB.reasons.includes(reason)) prevB.reasons.push(reason);
