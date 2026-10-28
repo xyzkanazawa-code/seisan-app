@@ -99,13 +99,11 @@ export function isPlaceSimilar(placeA: string, placeB: string): boolean {
   // 正当な店舗名同士で完全一致
   if (normA === normB) return true;
 
-  // 片方がもう片方を含んでいる場合（例: 「セブンイレブン」と「セブンイレブン日光駅前店」）
-  if (normA.length >= 3 && normB.length >= 3) {
+  // 【超重要】先頭4文字一致（「タイムズ」「コインパ」「セブン」等）は誤爆の温床（別拠点を同じと誤認）のため廃止！
+  // 片方がもう片方を完全に内包している場合（例: 「セブンイレブン日光駅前店」と「セブンイレブン日光駅前」）
+  // 短すぎるチェーン名単体（「タイムズ」「エネオス」等）による誤爆を防ぐため、双方とも5文字以上で内包チェック
+  if (normA.length >= 6 && normB.length >= 6) {
     if (normA.includes(normB) || normB.includes(normA)) {
-      return true;
-    }
-    // 先頭4文字が一致している場合（チェーン店名など）
-    if (normA.slice(0, 4) === normB.slice(0, 4)) {
       return true;
     }
   }
@@ -247,7 +245,12 @@ export function evaluateDuplicatePair(
   const normExistInv = existing.invoiceNumber?.trim().toUpperCase();
   const invoiceMatched = Boolean(normCandInv && normExistInv && normCandInv === normExistInv);
 
-  // 重要：店舗名が両方に正しく存在し、かつ明確に異なっている場合（例: セブンイレブン vs ENEOSなど）
+  // 【超重要】両方にインボイス登録番号があり、番号が異なる場合は100%別事業者・別店舗！
+  if (normCandInv && normExistInv && normCandInv !== normExistInv) {
+    return null;
+  }
+
+  // 重要：店舗名が両方に正しく存在し、かつ明確に異なっている場合（例: セブンイレブン vs ENEOS、タイムズ日光 vs タイムズ宇都宮など）
   // インボイス番号が一致している異常事態でない限り、同じ金額であっても別レシートとして扱い重複判定しない！
   if (placeDistinct && !invoiceMatched) {
     return null;

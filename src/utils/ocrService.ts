@@ -89,56 +89,55 @@ export function extractAmount(rawText: string): number {
   if (!rawText) return 0;
   const text = normalizeDigits(rawText);
 
-  // 1. 強力なパーキング・精算キーワード付き金額
-  // 例: 駐車料金 ¥500, 現収: 800円, 領収金額 1,200, 精算額 300円, 合計 1,500
-  const priorityPatterns = [
-    /(?:駐車料金|駐車料|現収金額|現収|精算金額|精算額|領収金額|領収額|受領金額|受領|利用料金|利用料|通行料金|運賃|乗車料金|メーター運賃|合計金額|合計|小計|お買上|支払金額|請求金額)[\s:：]*[¥\\YyPf]?\s*([0-9,]{3,9})\s*(?:円)?/i,
-    // ¥記号または円付き（3桁〜7桁: 100〜9,999,999）
-    /[¥\\Yy]\s*([0-9,]{3,9})/i,
-    /([0-9,]{3,9})\s*円/
+  // 1. 最優先：明確な「駐車料金」「領収金額」「合計」「料金」行の金額
+  // ※「精算日時」「精算機No」「入庫」「出庫」「お預り」等は除外
+  const highPriorityPatterns = [
+    /(?:駐車料金|駐車料|利用料金|利用料|通行料金|領収金額|領収額|請求金額|請求額|合計金額|合計|小計|お買上計)[\s:：]*[¥\\YyPf]?\s*([0-9,]{3,7})\s*(?:円)?/i,
+    // [¥記号] + 金額（例: ¥1,200, ¥500）ただし直前に「お預」「預り」「現収」「お釣」「釣銭」がないもの
+    /(?<!お預り|お預|預り|現収|釣銭|お釣|お釣り)[¥\\Yy]\s*([0-9,]{3,7})/i,
+    // ○○円（例: 1,200円, 500円）
+    /(?<!お預り|お預|預り|現収|釣銭|お釣|お釣り)([0-9,]{3,7})\s*円/i
   ];
 
-  for (const pattern of priorityPatterns) {
+  for (const pattern of highPriorityPatterns) {
     const match = text.match(pattern);
     if (match && match[1]) {
       const num = parseInt(match[1].replace(/,/g, ''), 10);
-      if (!isNaN(num) && num >= 50 && num < 10000000) {
+      // 日付（2024〜2035年）や8桁の日付、および50万円以上の異常値は除外
+      if (!isNaN(num) && num >= 50 && num <= 500000 && !(num >= 20240101 && num <= 20351231)) {
         return num;
       }
     }
   }
 
-  // 2. 「¥」の文字化け（F 500, P 800, T 1000等）やスペース混入への耐性
-  const spaceTolerantMatch = text.match(/(?:料金|合計|現収|精算|受領|金額)[\s:：]*([0-9\s,]{3,10})/i);
-  if (spaceTolerantMatch && spaceTolerantMatch[1]) {
-    const cleaned = spaceTolerantMatch[1].replace(/[\s,]/g, '');
-    const num = parseInt(cleaned, 10);
-    if (!isNaN(num) && num >= 50 && num < 10000000) {
+  // 2. 「現収」「受領」「精算額」（お預かり額の可能性もあるが次点）
+  // ※「精算日時」「精算機」「精算No」は除外
+  const secondaryMatch = text.match(/(?:現収金額|現収|受領金額|受領|精算額|精算料金)(?!日時|機|No|番号)[\s:：]*[¥\\YyPf]?\s*([0-9,]{3,7})/i);
+  if (secondaryMatch && secondaryMatch[1]) {
+    const num = parseInt(secondaryMatch[1].replace(/,/g, ''), 10);
+    if (!isNaN(num) && num >= 50 && num <= 500000 && !(num >= 20240101 && num <= 20351231)) {
       return num;
     }
   }
 
-  // 3. カンマ区切りの金額（例: 1,200, 3,500）
-  const commaMatches = text.match(/\b\d{1,3}(?:,\d{3})+\b/g);
+  // 3. カンマ区切りの妥当な金額（例: 1,200, 3,500）
+  const commaMatches = text.match(/\b([1-9]\d{0,2}(?:,\d{3})+)\b/g);
   if (commaMatches && commaMatches.length > 0) {
     for (let i = commaMatches.length - 1; i >= 0; i--) {
       const num = parseInt(commaMatches[i].replace(/,/g, ''), 10);
-      if (!isNaN(num) && num >= 100 && num < 10000000) {
+      if (!isNaN(num) && num >= 100 && num <= 500000) {
         return num;
       }
     }
   }
 
-  // 4. パーキングチケット等でカンマなしの3〜4桁の数字（例: 300, 400, 500, 800, 1000）
-  // ただし年号（2024〜2030）、時刻（12:30の1230）、郵便番号（0000）、電話番号等を除外
+  // 4. パーキングチケット等でカンマなしの3〜5桁の数字（例: 300, 500, 800, 1200）
+  // ただし年号（2020〜2035）、時刻（1230等）、電話番号等を除外
   const allNumberMatches = text.match(/\b([1-9]\d{2,4})\b/g);
   if (allNumberMatches) {
-    // 末尾付近の妥当な数字（パーキングの料金は中段〜下段に印字されることが多い）
     for (let i = allNumberMatches.length - 1; i >= 0; i--) {
       const num = parseInt(allNumberMatches[i], 10);
-      // 2020〜2035年は年の可能性が高いのでスキップ
       if (num >= 2020 && num <= 2035) continue;
-      // 100円〜20000円の範囲をパーキング・タクシーの料金候補とする
       if (num >= 100 && num <= 50000) {
         return num;
       }

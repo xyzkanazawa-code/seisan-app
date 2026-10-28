@@ -164,7 +164,8 @@ export async function analyzeReceiptsWithGemini(
 【経費種別ごとの重要読み取り指示】
 1. 駐車場（コインパーキング・市営駐車場・観光バス駐車場等）:
    - shopName: レシート上部や下部に印字された駐車場名（例: 「タイムズ日光駅前」「三井のリパーク 〇〇」「NPC24H 〇〇」「名鉄協商 〇〇」「〇〇市営駐車場」「〇〇観光バス駐車場」）。ブランド名だけでなく具体的な拠点名まで含めてください。
-   - totalAmount: 支払った料金（「領収金額」「料金」「現収」「合計」「駐車料金」などに記載された半角数値）。0円にせず必ず支払金額を読み取ってください。
+   - totalAmount: 実際に支払った料金（「領収金額」「料金」「現収」「合計」「駐車料金」などに記載された半角数値）。
+     ※【超厳禁】「精算日時（20261028等）」「入庫日時」「出庫日時」「精算機No」「駐車券No」「車両No」「お預り額」「釣銭」などの数字を絶対に totalAmount にしないでください！必ず実際の駐車料金（通常300円〜数千円、最大でも数万円）を抽出してください。
    - category: 必ず "駐車場" にしてください。
 2. ガソリンスタンド（燃料・軽油・ガソリン・AdBlue）:
    - shopName: 給油所名（例: 「ENEOS 〇〇SS」「出光」「コスモ石油」等）。
@@ -181,6 +182,10 @@ export async function analyzeReceiptsWithGemini(
    - ただし、1つの走行の内訳（通常料金、各種割引、内消費税等）は分割せず、割引適用後の最終通行料金1つを \`totalAmount\` としてください。
    - shopName: "ETC: 入口IC → 出口IC" の形式にしてください。
    - category: "ETC"。支払方法は "会社ETC"。
+
+【金額（totalAmount）の厳格ルール】
+- 日付（20261028等）、時刻、電話番号、郵便番号、車両番号、お預り金（10,000円など）、釣銭を金額に絶対に誤認しないでください。
+- 1回のレシート金額が数十万円・数百万円になることは運行経費では原則ありません。異常値は避け、必ず「領収金額・合計料金」を抽出してください。
 
 【各レシートの共通抽出項目】
 1. date: 利用日・精算日。"YYYY-MM-DD" 形式（例: "2026-10-28"）。年がなければ今年（2026年）を補完。
@@ -370,13 +375,25 @@ export async function analyzeReceiptsWithGemini(
   const today = new Date().toISOString().split('T')[0];
 
   const results: GeminiReceiptResult[] = rawList.map((item: any, idx: number) => {
-    const totalAmount = Number(item.totalAmount) || 0;
+    let totalAmount = Number(item.totalAmount) || 0;
     const itemsList = Array.isArray(item.items)
       ? item.items.map((it: any) => ({
           name: String(it?.name || '利用明細').trim(),
           price: Number(it?.price) || 0
         }))
       : [];
+
+    // 金額の異常値サニティチェック（日付 20261028 やインボイス番号、電話番号の誤認防止）
+    const validItemsSum = itemsList.reduce((s: number, it: any) => (it.price > 0 && it.price < 500000 ? s + it.price : s), 0);
+    if (totalAmount >= 20200101 && totalAmount <= 20351231) {
+      // 8桁の日付数値（20261028等）が入っていた場合は items の合計または0に補正
+      totalAmount = validItemsSum > 0 ? validItemsSum : 0;
+    } else if (totalAmount > 500000) {
+      // 50万円を超える異常な金額の場合
+      if (validItemsSum > 0 && validItemsSum <= 500000) {
+        totalAmount = validItemsSum;
+      }
+    }
 
     let entryGate = typeof item.entryGate === 'string' ? item.entryGate.trim() : undefined;
     let exitGate = typeof item.exitGate === 'string' ? item.exitGate.trim() : undefined;
