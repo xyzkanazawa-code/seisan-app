@@ -44,7 +44,21 @@ function normalizeDigits(str: string): string {
  */
 export function extractTimeFromReceiptText(text: string): string | undefined {
   if (!text) return undefined;
-  const timeMatch = text.match(/(?:^|[\s\r\n]|[0-9]{2,4}[/-][0-9]{1,2}[/-][0-9]{1,2}[\s　]+)([0-2]?[0-9])[:時]([0-5][0-9])/);
+  // 1. 午前/午後/AM/PM 付きの表記
+  const ampmMatch = text.match(/(?:午前|午後|AM|PM)[\s　]*([0-1]?[0-9])[:時]([0-5][0-9])/i);
+  if (ampmMatch) {
+    let hour = parseInt(ampmMatch[1], 10);
+    const minute = parseInt(ampmMatch[2], 10);
+    const isPm = /午後|PM/i.test(ampmMatch[0]);
+    if (isPm && hour < 12) hour += 12;
+    if (!isPm && hour === 12) hour = 0;
+    if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+      return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    }
+  }
+
+  // 2. 通常の時刻表記 (HH:mm または HH:mm:ss または HH時MM分)
+  const timeMatch = text.match(/(?:^|[\s\r\n]|[0-9]{2,4}[/-][0-9]{1,2}[/-][0-9]{1,2}[\s　]+)([0-2]?[0-9])[:時]([0-5][0-9])(?:[:分秒]|$|\s|[0-5][0-9])/);
   if (timeMatch) {
     const hour = parseInt(timeMatch[1], 10);
     const minute = parseInt(timeMatch[2], 10);

@@ -290,6 +290,7 @@ export function App() {
     etcType?: 'jissha' | 'kaiso';
     etcPaidByGuide?: boolean;
     etcDetails?: any;
+    isDuplicateDismissed?: boolean;
   }) => {
     // 紐付けるツアーを特定（selectedTour または activeTour があればそれを使用、なければ自動作成）
     let targetTourId = selectedTour?.id || activeTour?.id;
@@ -344,6 +345,7 @@ export function App() {
       etcDetails: receiptData.etcDetails,
       memo: receiptData.memo || undefined, // 📝 手打ちで入力した備考
       aiMemo: itemsMemo || undefined,     // 🤖 AIが読み取った品目（別項目）
+      isDuplicateDismissed: Boolean(receiptData.isDuplicateDismissed),
       createdAt: Date.now()
     };
 

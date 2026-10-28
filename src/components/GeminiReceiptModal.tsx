@@ -28,7 +28,7 @@ import { sliceImageVerticalSegments, autoDeskewAndPerspective } from '../utils/i
 import { getAppConfig } from '../utils/configStorage';
 import { checkReceiptDuplicates, type DuplicateMatch } from '../utils/duplicateChecker';
 import { ImageCropModal } from './ImageCropModal';
-import type { Tour } from '../db';
+import { db, type Tour } from '../db';
 
 interface GeminiReceiptModalProps {
   isOpen: boolean;
@@ -49,6 +49,7 @@ interface GeminiReceiptModalProps {
     etcType?: 'jissha' | 'kaiso';
     etcPaidByGuide?: boolean;
     etcDetails?: any;
+    isDuplicateDismissed?: boolean;
   }) => Promise<void>;
 }
 
@@ -283,12 +284,56 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
   const hasExactImageDuplicate = duplicates.some(d => d.confidence === 'exact_image');
   const hasNonEtcDuplicate = duplicates.some(d => !d.isEtc && (d.confidence === 'exact_image' || d.confidence === 'high' || d.confidence === 'medium'));
 
-  // 現在の1件を登録
-  const handleSaveCurrent = async () => {
+  // 既存レシートを今回の撮り直し写真・解析データで上書き更新（撮り直し差し替え）
+  const handleReplaceExistingReceipt = async (existingReceiptId: number) => {
     if (!currentImage || isSaving || saveSuccess) return;
 
-    // 二重登録の警告確認（ETC以外の重複、または完全同一画像の場合のみ確認）
-    if (hasNonEtcDuplicate || hasExactImageDuplicate) {
+    if (!window.confirm('既存の登録レシートを、今回の撮り直し写真・解析データで更新（差し替え）しますか？\n（二重登録にならず、綺麗に上書きされます）')) {
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const itemsMemo = editItems.length > 0
+        ? `【購入品目】\n` + editItems.map(it => `・${it.name}: ¥${it.price.toLocaleString()}`).join('\n')
+        : '';
+
+      const mappedCat = mapAiCategoryToExpenseCategory(editCategory);
+
+      await db.receipts.update(existingReceiptId, {
+        date: editDate || new Date().toISOString().split('T')[0],
+        time: editTime.trim() || undefined,
+        amount: Number(editTotalAmount) || 0,
+        place: editShopName || 'レシート経費',
+        category: mappedCat,
+        originalImageUrl: currentImage,
+        processedImageUrl: currentImage,
+        invoiceNumber: currentResult?.invoiceNumber,
+        isInvoiceValid: Boolean(currentResult?.invoiceNumber),
+        memo: editMemo.trim() || undefined,
+        aiMemo: itemsMemo || undefined,
+        isDuplicateDismissed: true, // 撮り直し更新済みなので重複警告を消す
+        etcType: isCurrentCategoryEtc ? etcType : undefined,
+        etcPaidByGuide: isCurrentCategoryEtc ? etcPaidByGuide : undefined
+      });
+
+      setSaveSuccess(true);
+      setTimeout(() => {
+        onClose();
+      }, 700);
+    } catch (err: any) {
+      console.error('レシート差し替え更新エラー:', err);
+      setAnalysisError(err?.message || '既存レシートの更新に失敗しました。');
+      setIsSaving(false);
+    }
+  };
+
+  // 現在の1件を登録（dismissDuplicate=true のときは二重警告を解除して即保存）
+  const handleSaveCurrent = async (dismissDuplicate: boolean = false) => {
+    if (!currentImage || isSaving || saveSuccess) return;
+
+    // 二重登録の警告確認（別物確定時やETC単独重複はスキップ）
+    if (!dismissDuplicate && (hasNonEtcDuplicate || hasExactImageDuplicate)) {
       const topMatch = duplicates[0];
       const msg = [
         '⚠️ 二重登録の可能性があります！',
@@ -299,8 +344,9 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
         `・金額: ¥${topMatch.existingReceipt.amount.toLocaleString()}`,
         `・判定理由: ${topMatch.reasons.join(' / ')}`,
         '',
-        '同じレシート・領収書ではありませんか？',
-        '本当にこのまま追加登録してもよろしいですか？'
+        '※ 以前の写真を撮り直した場合は「既存レシートを更新（撮り直し差し替え）」ボタンをご利用ください。',
+        '',
+        '別々のレシートとして追加登録してもよろしいですか？'
       ].join('\n');
 
       if (!window.confirm(msg)) {
@@ -326,7 +372,8 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
           entryGate: currentResult?.entryGate,
           exitGate: currentResult?.exitGate,
           splitIndex: resultsList.length > 1 ? activeIndex + 1 : undefined
-        } : undefined
+        } : undefined,
+        isDuplicateDismissed: dismissDuplicate
       });
 
       // 複数件ある場合、まだ未登録の次の明細へ進むか完了
@@ -1016,9 +1063,58 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                               {dup.isSameTour ? '【現在のツアー内で登録済】' : `【別ツアー ${dup.tourCode || ''} で登録済】`}{' '}
                               {dup.reasons.join(' / ')}
                             </div>
+                            {dup.existingReceipt.id && dup.isSameTour && (
+                              <div style={{ marginTop: '6px', display: 'flex', gap: '6px' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleReplaceExistingReceipt(dup.existingReceipt.id!)}
+                                  style={{
+                                    padding: '5px 12px',
+                                    borderRadius: '8px',
+                                    background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
+                                    color: '#ffffff',
+                                    border: 'none',
+                                    fontSize: '0.74rem',
+                                    fontWeight: 800,
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '5px',
+                                    boxShadow: '0 2px 8px rgba(37, 99, 235, 0.3)'
+                                  }}
+                                  title="以前の写真を今回の撮り直し写真・解析データで綺麗に上書き更新します"
+                                >
+                                  <RefreshCw size={13} />
+                                  <span>🔄 撮り直しとしてこのデータを更新</span>
+                                </button>
+                              </div>
+                            )}
                           </div>
                         </div>
                       ))}
+                    </div>
+                    {/* 別物として新規登録するショートカット */}
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleSaveCurrent(true)}
+                        style={{
+                          padding: '6px 14px',
+                          borderRadius: '8px',
+                          background: 'rgba(16, 185, 129, 0.2)',
+                          border: '1px solid rgba(16, 185, 129, 0.5)',
+                          color: '#a7f3d0',
+                          fontSize: '0.75rem',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
+                        }}
+                      >
+                        <CheckCircle2 size={14} color="#10b981" />
+                        <span>別物として新規追加（警告を解除して保存）</span>
+                      </button>
                     </div>
                   </div>
                 )
@@ -1542,7 +1638,7 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                 <button
                   type="button"
                   disabled={isSaving}
-                  onClick={handleSaveCurrent}
+                  onClick={() => handleSaveCurrent(false)}
                   style={{
                     padding: '14px',
                     borderRadius: '16px',

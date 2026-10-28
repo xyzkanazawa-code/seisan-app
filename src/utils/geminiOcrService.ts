@@ -383,8 +383,20 @@ export async function analyzeReceiptsWithGemini(
       };
     }
 
+    // 時刻 (HH:mm) の正規化
+    let parsedTime: string | undefined = undefined;
+    if (typeof item.time === 'string' && item.time.trim()) {
+      const tm = item.time.trim().match(/(?:^|[\sT])([0-2]?[0-9])[:時]([0-5][0-9])/);
+      if (tm) {
+        const hh = tm[1].padStart(2, '0');
+        const mm = tm[2];
+        parsedTime = `${hh}:${mm}`;
+      }
+    }
+
     const res: GeminiReceiptResult = {
       date: typeof item.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item.date) ? item.date : today,
+      time: parsedTime,
       shopName,
       entryGate,
       exitGate,

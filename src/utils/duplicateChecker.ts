@@ -53,18 +53,51 @@ export function normalizePlaceName(name: string): string {
 }
 
 /**
+ * 汎用名・デフォルト名判定（店名未読取時に入る名称）
+ * 表記ゆれ（長音符除去等）を考慮してすべて normalizePlaceName して格納
+ */
+const RAW_GENERIC_PLACES = [
+  '経費',
+  'その他',
+  'その他経費',
+  'レシート経費',
+  '運行経費',
+  '不明',
+  '利用場所不明',
+  '店舗名不明',
+  '店名不明',
+  'レシート',
+  '領収書',
+  '領収証',
+  'お買上票',
+  'お買い上げ票',
+  'お買上げ票',
+  '計算書',
+  '明細書',
+  'ご利用明細'
+];
+
+export const GENERIC_PLACE_NAMES = new Set(RAW_GENERIC_PLACES.map(normalizePlaceName));
+
+export function isGenericPlace(name: string): boolean {
+  const norm = normalizePlaceName(name);
+  if (!norm) return true;
+  return GENERIC_PLACE_NAMES.has(norm);
+}
+
+/**
  * 2つの正規化済み店舗名が類似しているか判定
  */
 export function isPlaceSimilar(placeA: string, placeB: string): boolean {
   const normA = normalizePlaceName(placeA);
   const normB = normalizePlaceName(placeB);
 
+  // どちらかが未入力または汎用名（「運行経費」「レシート」など）の場合は一致とみなさない
   if (!normA || !normB) return false;
-  if (normA === normB) return true;
+  if (isGenericPlace(normA) || isGenericPlace(normB)) return false;
 
-  // 初期デフォルト名（「経費」「その他経費」「レシート経費」など）は店舗名一致とみなさない
-  const genericNames = new Set(['経費', 'その他経費', 'レシート経費', '不明', '利用場所不明']);
-  if (genericNames.has(normA) || genericNames.has(normB)) return false;
+  // 正当な店舗名同士で完全一致
+  if (normA === normB) return true;
 
   // 片方がもう片方を含んでいる場合（例: 「セブンイレブン」と「セブンイレブン日光駅前店」）
   if (normA.length >= 3 && normB.length >= 3) {
@@ -88,8 +121,7 @@ export function isPlaceDistinct(placeA: string, placeB: string): boolean {
   const normA = normalizePlaceName(placeA);
   const normB = normalizePlaceName(placeB);
   if (!normA || !normB) return false;
-  const genericNames = new Set(['経費', 'その他経費', 'レシート経費', '不明', '利用場所不明']);
-  if (genericNames.has(normA) || genericNames.has(normB)) return false;
+  if (isGenericPlace(normA) || isGenericPlace(normB)) return false;
   return !isPlaceSimilar(placeA, placeB);
 }
 
@@ -215,10 +247,6 @@ export function evaluateDuplicatePair(
   const normExistInv = existing.invoiceNumber?.trim().toUpperCase();
   const invoiceMatched = Boolean(normCandInv && normExistInv && normCandInv === normExistInv);
 
-  const categoryMatched = Boolean(
-    candidate.category && existing.category && candidate.category === existing.category
-  );
-
   // 重要：店舗名が両方に正しく存在し、かつ明確に異なっている場合（例: セブンイレブン vs ENEOSなど）
   // インボイス番号が一致している異常事態でない限り、同じ金額であっても別レシートとして扱い重複判定しない！
   if (placeDistinct && !invoiceMatched) {
@@ -243,13 +271,18 @@ export function evaluateDuplicatePair(
     return null;
   }
 
+  // 画像知覚ハッシュ（aHash）の比較
+  const hashDist = getHashDistance(_candidateHash, _existingHash);
+  const isImageVisuallySame = hashDist <= 10;
+
   // 2. 高確度重複 (High)（ETC以外）:
-  // - 利用日一致 + 金額一致 + (店舗名類似 または インボイス番号一致)
-  if (isSameDate && isSameAmount && (placeMatched || invoiceMatched)) {
+  // - 利用日一致 + 金額一致 + (店舗名類似 または インボイス番号一致 または 画像視覚類似)
+  if (isSameDate && isSameAmount && (placeMatched || invoiceMatched || isImageVisuallySame)) {
     reasons.push(`利用日(${existing.date})と金額(¥${existingAmount.toLocaleString()})が一致`);
     if (existing.time && timeDiff !== null && timeDiff < 10) {
       reasons.push(`利用時刻(${existing.time})も一致/近接`);
     }
+    if (isImageVisuallySame) reasons.push('レシート画像が極めて類似');
     if (placeMatched) reasons.push(`利用場所「${existing.place}」が一致・類似`);
     if (invoiceMatched) reasons.push(`インボイス番号(${normExistInv})が一致`);
     return { confidence: 'high', reasons, isEtc: false };
@@ -263,15 +296,15 @@ export function evaluateDuplicatePair(
     return { confidence: 'medium', reasons, isEtc: false };
   }
 
-  // 3. 中確度重複 (Medium)（店舗名が空欄・汎用名で特定できない場合のみ）:
-  // 店舗名が特定できない（空文字または「経費」「不明」など）かつ、同一ツアー内で利用日・金額・科目が一致
-  const hasValidPlace = Boolean(
-    candidate.place &&
-    !['経費', 'その他経費', 'レシート経費', '不明', '利用場所不明'].includes(normalizePlaceName(candidate.place))
-  );
-  if (!hasValidPlace && isSameDate && isSameAmount && categoryMatched && candidate.tourId === existing.tourId) {
-    reasons.push(`店舗名不明かつ同じ日付(${existing.date})・金額(¥${existingAmount.toLocaleString()})・科目`);
-    return { confidence: 'medium', reasons, isEtc: false };
+  // 3. 中確度重複 (Medium)（店舗名が空欄・汎用名で特定できない場合）:
+  // 誤爆防止のため、画像が視覚的に同一、またはインボイス番号・時刻が一致している場合のみ重複と判定
+  const candidateHasValidPlace = !isGenericPlace(candidate.place);
+  const existingHasValidPlace = !isGenericPlace(existing.place);
+  if (!candidateHasValidPlace || !existingHasValidPlace) {
+    if (isSameDate && isSameAmount && (isImageVisuallySame || invoiceMatched)) {
+      reasons.push(`店舗名未特定ですが、日付・金額および${isImageVisuallySame ? '画像特徴' : 'インボイス番号'}が一致`);
+      return { confidence: 'medium', reasons, isEtc: false };
+    }
   }
 
   return null;

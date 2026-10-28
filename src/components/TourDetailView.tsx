@@ -79,10 +79,14 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
     }
   };
 
-  // 重複警告の解除（「別物として確認済みにする」）
+  // 重複警告の解除（「別物として確認済みにする」：重複相手のレシートも含めて一括解除）
   const handleDismissDuplicate = async (id?: number) => {
     if (!id) return;
-    await db.receipts.update(id, { isDuplicateDismissed: true });
+    const dupInfo = duplicateMap.get(id);
+    const targetIds = [id, ...(dupInfo?.matchedWithIds || [])];
+    await Promise.all(
+      targetIds.map((tid) => db.receipts.update(tid, { isDuplicateDismissed: true }))
+    );
     loadReceipts();
   };
 
@@ -1006,6 +1010,27 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
                         </span>
                       </span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingReceipt(r);
+                            setIsEditReceiptModalOpen(true);
+                          }}
+                          style={{
+                            padding: '2px 8px',
+                            borderRadius: 4,
+                            background: 'rgba(168, 85, 247, 0.25)',
+                            border: '1px solid rgba(168, 85, 247, 0.55)',
+                            color: '#d8b4fe',
+                            fontSize: '0.7rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap'
+                          }}
+                          title="このレシートの写真を撮り直して上書き更新します"
+                        >
+                          📷 撮り直す
+                        </button>
                         <button
                           type="button"
                           onClick={() => handleDismissDuplicate(r.id)}

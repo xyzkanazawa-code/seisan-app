@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { X, Save, Calendar, Clock, DollarSign, MapPin, Tag, CreditCard, Trash2, CheckCircle2, AlertCircle, Sparkles, FileText, Scissors } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Save, Calendar, Clock, DollarSign, MapPin, Tag, CreditCard, Trash2, CheckCircle2, AlertCircle, Sparkles, FileText, Scissors, Camera } from 'lucide-react';
 import { db, type ExpenseCategory, type PaymentMethod, type Receipt } from '../db';
 import { extractInvoiceNumbers } from '../utils/invoiceValidator';
 import { learnFromReceipt } from '../utils/learningService';
@@ -52,6 +52,30 @@ export const EditReceiptModal: React.FC<EditReceiptModalProps> = ({
   const [currentProcessedImageUrl, setCurrentProcessedImageUrl] = useState('');
   const [isCroppingModalOpen, setIsCroppingModalOpen] = useState(false);
   const [isTightening, setIsTightening] = useState(false);
+  const retakeInputRef = useRef<HTMLInputElement>(null);
+
+  // カメラ・ファイルからの写真撮り直し差し替え
+  const handleRetakeImage = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUrl = reader.result as string;
+      if (dataUrl) {
+        setCurrentProcessedImageUrl(dataUrl);
+        if (receipt?.id) {
+          await db.receipts.update(receipt.id, {
+            processedImageUrl: dataUrl,
+            originalImageUrl: dataUrl,
+            isDuplicateDismissed: true // 撮り直しで上書きするため重複警告を解除
+          });
+          onReceiptUpdated();
+        }
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
 
   // レシート情報が渡されたらフォームステートを初期化
   useEffect(() => {
@@ -244,19 +268,54 @@ export const EditReceiptModal: React.FC<EditReceiptModalProps> = ({
                   </div>
                 </div>
 
-                {/* 余白カット・切り取り調整アクションボタン */}
-                <div style={{ display: 'flex', gap: 6, paddingTop: 4, borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                {/* 余白カット・切り取り調整・写真撮り直しアクションボタン */}
+                <div style={{ display: 'flex', gap: 6, paddingTop: 4, borderTop: '1px solid rgba(255, 255, 255, 0.06)', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => retakeInputRef.current?.click()}
+                    style={{
+                      flex: 1,
+                      minWidth: '120px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 5,
+                      padding: '7px 10px',
+                      borderRadius: 'var(--radius-sm)',
+                      background: 'rgba(168, 85, 247, 0.18)',
+                      color: '#d8b4fe',
+                      border: '1px solid rgba(168, 85, 247, 0.45)',
+                      fontSize: '0.74rem',
+                      fontWeight: 800,
+                      cursor: 'pointer'
+                    }}
+                    title="カメラを起動してレシート写真を撮り直します（綺麗に上書き更新されます）"
+                  >
+                    <Camera size={13} />
+                    <span>📷 写真を撮り直す</span>
+                  </button>
+
+                  <input
+                    ref={retakeInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    style={{ display: 'none' }}
+                    onChange={handleRetakeImage}
+                  />
+
                   <button
                     type="button"
                     onClick={handleAutoTighten}
                     disabled={isTightening}
                     style={{
                       flex: 1,
+                      minWidth: '110px',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
                       gap: 5,
-                      padding: '6px 10px',
+                      padding: '7px 10px',
                       borderRadius: 'var(--radius-sm)',
                       background: 'rgba(59, 130, 246, 0.12)',
                       color: '#60a5fa',
@@ -278,7 +337,7 @@ export const EditReceiptModal: React.FC<EditReceiptModalProps> = ({
                       display: 'flex',
                       alignItems: 'center',
                       gap: 5,
-                      padding: '6px 12px',
+                      padding: '7px 10px',
                       borderRadius: 'var(--radius-sm)',
                       background: 'rgba(255, 255, 255, 0.06)',
                       color: 'var(--text-muted)',

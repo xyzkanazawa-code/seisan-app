@@ -50,6 +50,7 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
   const [itemDuplicates, setItemDuplicates] = useState<
     Record<string, { dbMatches: DuplicateMatch[]; batchMatchIndex?: number; batchReasons?: string[] }>
   >({});
+  const [dismissedDuplicateIds, setDismissedDuplicateIds] = useState<string[]>([]);
 
   // ワンタップ斜め・台形・余白自動カット
   const handleQuickTighten = async (item: ParsedReceiptItem) => {
@@ -235,7 +236,9 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
 
   if (!isOpen || items.length === 0) return null;
 
-  const duplicateItemIds = Object.keys(itemDuplicates);
+  const duplicateItemIds = Object.keys(itemDuplicates).filter(
+    (id) => !dismissedDuplicateIds.includes(id)
+  );
 
   // 重複候補を一括でリストから除外
   const removeDuplicateItems = () => {
@@ -326,6 +329,7 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
           etcType: item.category === 'etc' ? (item.etcType || 'jissha') : undefined,
           etcPaidByGuide: item.category === 'etc' ? Boolean(item.etcPaidByGuide) : undefined,
           memo: item.memo,
+          isDuplicateDismissed: Boolean(duplicateItemIds.includes(item.id)),
           createdAt: baseNow + index
         });
       }
@@ -487,23 +491,42 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
                   ⚠️ 二重登録の可能性があるレシートが <strong>{duplicateItemIds.length}件</strong> 検出されました！
                 </span>
               </div>
-              <button
-                type="button"
-                onClick={removeDuplicateItems}
-                style={{
-                  fontSize: '0.75rem',
-                  fontWeight: 800,
-                  padding: '6px 12px',
-                  borderRadius: 6,
-                  background: '#f59e0b',
-                  color: '#0f172a',
-                  border: 'none',
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap'
-                }}
-              >
-                重複候補を一括除外 ({duplicateItemIds.length}件)
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setDismissedDuplicateIds(Object.keys(itemDuplicates))}
+                  style={{
+                    fontSize: '0.75rem',
+                    fontWeight: 800,
+                    padding: '6px 12px',
+                    borderRadius: 6,
+                    background: 'rgba(16, 185, 129, 0.25)',
+                    color: '#a7f3d0',
+                    border: '1px solid rgba(16, 185, 129, 0.6)',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  ✓ 全て別物として確認
+                </button>
+                <button
+                  type="button"
+                  onClick={removeDuplicateItems}
+                  style={{
+                    fontSize: '0.75rem',
+                    fontWeight: 800,
+                    padding: '6px 12px',
+                    borderRadius: 6,
+                    background: '#f59e0b',
+                    color: '#0f172a',
+                    border: 'none',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  重複候補を一括除外 ({duplicateItemIds.length}件)
+                </button>
+              </div>
             </div>
           )}
 
@@ -526,7 +549,7 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
               }}
             >
               {/* 個別カードの二重登録アラート */}
-              {dupInfo && (
+              {dupInfo && !dismissedDuplicateIds.includes(item.id) && (
                 isEtcOnlyDup ? (
                   /* ETCの控えめアラート */
                   <div
@@ -562,27 +585,45 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
                       gap: 6
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, color: '#fbbf24', fontSize: '0.8rem' }}>
                         <AlertTriangle size={15} color="#fbbf24" />
                         二重登録の疑い（重複検知）
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => removeItem(item.id)}
-                        style={{
-                          padding: '3px 8px',
-                          borderRadius: 4,
-                          background: 'rgba(239, 68, 68, 0.25)',
-                          border: '1px solid rgba(239, 68, 68, 0.5)',
-                          color: '#fca5a5',
-                          fontSize: '0.7rem',
-                          fontWeight: 700,
-                          cursor: 'pointer'
-                        }}
-                      >
-                        重複のため除外
-                      </button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <button
+                          type="button"
+                          onClick={() => setDismissedDuplicateIds((prev) => [...prev, item.id])}
+                          style={{
+                            padding: '3px 8px',
+                            borderRadius: 4,
+                            background: 'rgba(16, 185, 129, 0.2)',
+                            border: '1px solid rgba(16, 185, 129, 0.5)',
+                            color: '#a7f3d0',
+                            fontSize: '0.7rem',
+                            fontWeight: 700,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          ✓ 別物として確認
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeItem(item.id)}
+                          style={{
+                            padding: '3px 8px',
+                            borderRadius: 4,
+                            background: 'rgba(239, 68, 68, 0.25)',
+                            border: '1px solid rgba(239, 68, 68, 0.5)',
+                            color: '#fca5a5',
+                            fontSize: '0.7rem',
+                            fontWeight: 700,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          重複のため除外
+                        </button>
+                      </div>
                     </div>
 
                     {dupInfo.batchMatchIndex !== undefined && (
