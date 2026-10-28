@@ -24,7 +24,7 @@ import {
   type GeminiReceiptResult,
   type GeminiReceiptItem
 } from '../utils/geminiOcrService';
-import { sliceImageVerticalSegments, autoDeskewAndPerspective } from '../utils/imageProcessor';
+import { sliceImageVerticalSegments } from '../utils/imageProcessor';
 import { getAppConfig } from '../utils/configStorage';
 import { checkReceiptDuplicates, type DuplicateMatch } from '../utils/duplicateChecker';
 import { ImageCropModal } from './ImageCropModal';
@@ -182,20 +182,11 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
       setAnalysisError(null);
       setSaveSuccess(false);
       const dataUrl = await fileToDataUrl(file);
-      // 撮影・選択直後に、斜め傾き・台形歪み・余白を自動で整えてから解析
-      let processedDataUrl = dataUrl;
-      try {
-        const autoCorrected = await autoDeskewAndPerspective(dataUrl);
-        if (autoCorrected.correctedDataUrl) {
-          processedDataUrl = autoCorrected.correctedDataUrl;
-        }
-      } catch (err) {
-        console.warn('自動歪み補正スキップ:', err);
-      }
 
-      setSelectedImage(processedDataUrl);
-      // 自動でGemini解析を実行
-      runGeminiAnalysis(processedDataUrl);
+      // 元の撮影写真（高解像度・端の文字の欠損なし）のままGeminiに解析させる
+      // ※自前Canvasによる強制回転・自動クロップは文字欠損（店名や金額の切り落とし）を招くため行わない
+      setSelectedImage(dataUrl);
+      runGeminiAnalysis(dataUrl);
     } catch (err: any) {
       setAnalysisError(err?.message || '画像の読み込みに失敗しました。');
     }

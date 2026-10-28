@@ -157,52 +157,61 @@ export async function analyzeReceiptsWithGemini(
   const optimizedDataUrl = await optimizeImageForGemini(imageDataUrl);
   const { mimeType, base64Data } = extractMimeAndBase64(optimizedDataUrl);
 
-  // 3. プロンプト定義（縦連続ETC明細の完全分離指示）
-  const prompt = `あなたはバス乗務員・運行経費（ETC利用証明書、有料道路、駐車場、ガソリン燃料、タクシー、宿泊、その他経費）の高精度OCR解析エンジンです。
-添付された画像から情報を正確に読み取り、必ず指定されたJSON形式で返却してください。
+  // 3. プロンプト定義（駐車場・給油・飲食・ETCなど全経費の超高精度読み取り）
+  const prompt = `あなたはプロのバス運行経費・領収書・レシート専用の超高精度OCR解析AIです。
+画像全体を注意深く読み取り、店舗名・利用場所名・利用日・利用時刻・合計支払金額・品目を正確に抽出して指定のJSON形式で返却してください。
 
-【超重要指示：縦に連続したETC利用明細・複数レシートの分離と金額計算】
-- ETC利用証明書・利用明細書は、1本の細長い紙に複数の利用区間・走行明細（複数の「御利用書」「ETC利用証明書」「利用明細」「通行料金」「料金所」）が縦に連続して印字されていることが多々あります。
-- ただし、**1つの走行区間（1枚のETC利用証明書）の中に記載されている「通常料金」「ETC割引」「休日割引」「深夜割引」「平日朝夕割引」「内消費税」などを別々のレシートに分割してはいけません！** それらは1回の走行の内訳であり、最終的に支払った通行料金（割引適用後の金額1つだけ）を \`totalAmount\` としてください。
-- もしレシートの下部に「合計 N件 〇〇円」のような総合計行が印字されていても、各区間明細を個別に出力した場合は、**その総合計行をもう1件のレシートとして出力しないでください（二重計上になります）！**
-- 複数枚の別々の領収書・レシート、または明確に別の走行区間（入口IC→出口ICが異なる複数区間）が写っている場合のみ、1区間・1枚ごとに分離したレシート配列として出力してください。
-- レシートが1枚（1区間）だけの場合でも、配列 "receipts": [ ... ] の形式で出力してください。
+【経費種別ごとの重要読み取り指示】
+1. 駐車場（コインパーキング・市営駐車場・観光バス駐車場等）:
+   - shopName: レシート上部や下部に印字された駐車場名（例: 「タイムズ日光駅前」「三井のリパーク 〇〇」「NPC24H 〇〇」「名鉄協商 〇〇」「〇〇市営駐車場」「〇〇観光バス駐車場」）。ブランド名だけでなく具体的な拠点名まで含めてください。
+   - totalAmount: 支払った料金（「領収金額」「料金」「現収」「合計」「駐車料金」などに記載された半角数値）。0円にせず必ず支払金額を読み取ってください。
+   - category: 必ず "駐車場" にしてください。
+2. ガソリンスタンド（燃料・軽油・ガソリン・AdBlue）:
+   - shopName: 給油所名（例: 「ENEOS 〇〇SS」「出光」「コスモ石油」等）。
+   - totalAmount: 最終支払金額（給油合計額）。
+   - category: 必ず "燃料" にしてください。
+3. 食事・お茶・コンビニ・売店・自動販売機:
+   - shopName: 店舗名（例: 「セブン-イレブン 〇〇店」「ローソン」「ファミリーマート」「〇〇食堂」「〇〇PA売店」等）。
+   - category: 内容や時間帯に応じて "朝食代", "昼食代", "夜食代", "お茶代", "ミネラルウォーター", "その他" から適切なものを選択。
+4. 有料道路・普通料金所（非ETCの現金/領収書）:
+   - shopName: 道路名または料金所名（例: 「富士山スカイライン」「日光宇都宮道路 〇〇料金所」等）。
+   - category: "有料道路"。
+5. ETC利用証明書・利用明細書:
+   - 1本の縦長い紙に複数の利用区間が縦に連続して印字されている場合は、1走行区間（入口IC→出口IC）ごとに別々のレシートオブジェクトとして配列に出力してください。
+   - ただし、1つの走行の内訳（通常料金、各種割引、内消費税等）は分割せず、割引適用後の最終通行料金1つを \`totalAmount\` としてください。
+   - shopName: "ETC: 入口IC → 出口IC" の形式にしてください。
+   - category: "ETC"。支払方法は "会社ETC"。
 
-【各レシートの抽出項目】
-1. date: 利用日・購入日。必ず "YYYY-MM-DD" 形式（例: "2026-10-09"）。年がない場合は今年（2026年）を補完。
-2. time: 利用時刻・購入時刻。必ず "HH:mm" 形式（例: "12:34", "08:15"）。レシートに時刻の印字があれば抽出。なければ空文字。
-3. shopName: 店舗名・料金所名・区間名（ETCの場合は "ETC: 東京 → 厚木IC" のように区間がわかる名称にしてください）。
-4. entryGate: ETCの場合の入口料金所名（例: "東京", "厚木"）。不明なら空文字。
-5. exitGate: ETCの場合の出口料金所名（例: "沼津", "小田原"）。不明なら空文字。
-6. items: 内訳リスト [{ "name": "品目名または区間名", "price": 数値 }]。
-7. totalAmount: その区間・レシートの支払金額（半角数値）。
-8. category: 経費カテゴリ（"ETC" | "駐車場" | "燃料" | "有料道路" | "朝食代" | "昼食代" | "夜食代" | "お茶代" | "ミネラルウォーター" | "残業代" | "タクシー" | "宿泊" | "その他"）。
-9. paymentMethod: 支払方法（"会社ETC" | "前払い金" | "現金" | "会社カード" | "燃料カード" | "その他"）。ETCの場合は "会社ETC"。
-10. invoiceNumber: インボイス登録番号（"T" + 13桁の数字）。なければ空文字。
-11. splitBox: 縦に連続したレシートの場合、その区間が画像全体の縦方向のどの位置にあるか（0.0〜1.0）。例: {"topPct": 0.0, "bottomPct": 0.5}。1枚だけなら {"topPct": 0.0, "bottomPct": 1.0}。
+【各レシートの共通抽出項目】
+1. date: 利用日・精算日。"YYYY-MM-DD" 形式（例: "2026-10-28"）。年がなければ今年（2026年）を補完。
+2. time: 利用時刻・精算時刻。"HH:mm" 形式（例: "14:35", "09:10"）。印字があれば必ず抽出。なければ空文字。
+3. shopName: 店舗名・駐車場名・施設名・利用場所名。
+4. totalAmount: 実際に支払った合計金額（半角数値）。必ず数値を抽出してください。
+5. category: 経費カテゴリ（"駐車場" | "燃料" | "有料道路" | "ETC" | "朝食代" | "昼食代" | "夜食代" | "お茶代" | "ミネラルウォーター" | "残業代" | "タクシー" | "宿泊" | "その他"）。
+6. paymentMethod: 支払方法（"会社ETC" | "前払い金" | "現金" | "会社カード" | "燃料カード" | "その他"）。
+7. invoiceNumber: 適格請求書発行事業者登録番号（"T" + 13桁の数字）。印字があれば抽出、なければ空文字。
+8. items: 内訳品目リスト [{ "name": "品目名または料金名", "price": 数値 }]。
+9. splitBox: 画像内の縦位置比率（例: {"topPct": 0.0, "bottomPct": 1.0}）。
 
-【返却JSONスキーマ】
+【返却JSON形式】
+必ず以下のJSON形式のみを出力してください。Markdownコードフェンス（\`\`\`json等）は付けず、純粋なJSON文字列として返却してください。
 {
   "receipts": [
     {
-      "date": "2026-10-09",
-      "time": "12:34",
-      "shopName": "ETC: 東京 → 海老名IC",
-      "entryGate": "東京",
-      "exitGate": "海老名",
-      "items": [{ "name": "東名高速道路", "price": 1850 }],
-      "totalAmount": 1850,
-      "category": "ETC",
-      "paymentMethod": "会社ETC",
+      "date": "2026-10-28",
+      "time": "14:35",
+      "shopName": "タイムズ日光駅前",
+      "entryGate": "",
+      "exitGate": "",
+      "items": [{ "name": "駐車料金", "price": 1200 }],
+      "totalAmount": 1200,
+      "category": "駐車場",
+      "paymentMethod": "現金",
       "invoiceNumber": "T1234567890123",
-      "splitBox": { "topPct": 0.0, "bottomPct": 0.5 }
+      "splitBox": { "topPct": 0.0, "bottomPct": 1.0 }
     }
   ]
-}
-
-【出力仕様】
-- Markdownの修飾コードブロック（\`\`\`json 等）を含めず、純粋なJSON文字列として出力してください。
-- 金額はすべて半角数値（Number）にしてください。`;
+}`;
 
   const requestBody = {
     contents: [
@@ -223,17 +232,17 @@ export async function analyzeReceiptsWithGemini(
     ],
     generationConfig: {
       response_mime_type: 'application/json',
-      temperature: 0.1
+      temperature: 0.0
     }
   };
 
-  // 4. APIキーで使用可能なモデル候補
+  // 4. APIキーで使用可能なモデル候補（高精度モデルを最優先）
   let candidateModels = [
     'gemini-2.5-flash',
     'gemini-2.0-flash',
     'gemini-1.5-flash',
-    'gemini-2.0-flash-exp',
-    'gemini-1.5-flash-latest'
+    'gemini-1.5-flash-latest',
+    'gemini-2.0-flash-exp'
   ];
 
   try {
@@ -248,12 +257,20 @@ export async function analyzeReceiptsWithGemini(
           Array.isArray(m?.supportedGenerationMethods) &&
           m.supportedGenerationMethods.includes('generateContent') &&
           typeof m?.name === 'string' &&
-          m.name.includes('flash')
+          m.name.includes('flash') &&
+          !m.name.includes('8b') // 8b等の極小モデルは精度低下防止のため除外
         )
         .map((m: any) => m.name.replace(/^models\//, ''));
 
       if (supportedFlashModels.length > 0) {
-        candidateModels = [...new Set([...supportedFlashModels, ...candidateModels])];
+        // 高性能順にソートして先頭に配置
+        const preferredOrder = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-latest'];
+        const sorted = supportedFlashModels.sort((a: string, b: string) => {
+          const idxA = preferredOrder.findIndex((p) => a.includes(p));
+          const idxB = preferredOrder.findIndex((p) => b.includes(p));
+          return (idxA >= 0 ? idxA : 99) - (idxB >= 0 ? idxB : 99);
+        });
+        candidateModels = [...new Set([...sorted, ...candidateModels])];
       }
     }
   } catch (err) {
