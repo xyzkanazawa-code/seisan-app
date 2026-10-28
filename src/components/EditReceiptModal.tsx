@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, Calendar, DollarSign, MapPin, Tag, CreditCard, Trash2, CheckCircle2, AlertCircle, Sparkles, FileText, Scissors } from 'lucide-react';
+import { X, Save, Calendar, Clock, DollarSign, MapPin, Tag, CreditCard, Trash2, CheckCircle2, AlertCircle, Sparkles, FileText, Scissors } from 'lucide-react';
 import { db, type ExpenseCategory, type PaymentMethod, type Receipt } from '../db';
 import { extractInvoiceNumbers } from '../utils/invoiceValidator';
 import { learnFromReceipt } from '../utils/learningService';
@@ -38,6 +38,7 @@ export const EditReceiptModal: React.FC<EditReceiptModalProps> = ({
   const [category, setCategory] = useState<ExpenseCategory>('parking');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [date, setDate] = useState('');
+  const [time, setTime] = useState('');
   const [amount, setAmount] = useState<number | ''>('');
   const [place, setPlace] = useState('');
   const [invoiceNumber, setInvoiceNumber] = useState('');
@@ -58,6 +59,7 @@ export const EditReceiptModal: React.FC<EditReceiptModalProps> = ({
       setCategory(receipt.category);
       setPaymentMethod(receipt.paymentMethod);
       setDate(receipt.date || new Date().toISOString().split('T')[0]);
+      setTime(receipt.time || '');
       setAmount(receipt.amount);
       setPlace(receipt.place || '');
       setInvoiceNumber(receipt.invoiceNumber || '');
@@ -137,6 +139,7 @@ export const EditReceiptModal: React.FC<EditReceiptModalProps> = ({
               : 'company_etc'
             : paymentMethod,
         date,
+        time: time.trim() || undefined,
         amount: Number(amount),
         place: place.trim() || '経費',
         invoiceNumber: formattedInvoice,
@@ -315,18 +318,33 @@ export const EditReceiptModal: React.FC<EditReceiptModalProps> = ({
                 </div>
               </div>
 
-              <div className="form-group">
-                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <Calendar size={14} />
-                  利用日 *
-                </label>
-                <input
-                  type="date"
-                  className="form-input"
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  required
-                />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <Calendar size={14} />
+                    利用日 *
+                  </label>
+                  <input
+                    type="date"
+                    className="form-input"
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <Clock size={14} />
+                    利用時刻
+                  </label>
+                  <input
+                    type="time"
+                    className="form-input"
+                    value={time}
+                    onChange={(e) => setTime(e.target.value)}
+                    placeholder="例: 12:34"
+                  />
+                </div>
               </div>
             </div>
 

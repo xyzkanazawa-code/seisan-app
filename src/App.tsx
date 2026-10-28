@@ -280,6 +280,7 @@ export function App() {
   const handleSaveGeminiReceipt = async (receiptData: {
     shopName: string;
     date: string;
+    time?: string;
     amount: number;
     category: string;
     items: GeminiReceiptItem[];
@@ -329,6 +330,7 @@ export function App() {
       category: mappedCategory,
       paymentMethod: mappedPayment,
       date: receiptData.date,
+      time: receiptData.time,
       amount: receiptData.amount,
       place: receiptData.shopName,
       invoiceNumber: receiptData.invoiceNumber,

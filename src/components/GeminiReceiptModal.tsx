@@ -9,6 +9,7 @@ import {
   AlertCircle,
   AlertTriangle,
   Calendar,
+  Clock,
   Store,
   FileCode,
   Plus,
@@ -38,6 +39,7 @@ interface GeminiReceiptModalProps {
   onSaveToExpense: (receiptData: {
     shopName: string;
     date: string;
+    time?: string;
     amount: number;
     category: string;
     items: GeminiReceiptItem[];
@@ -67,6 +69,7 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
   const [activeIndex, setActiveIndex] = useState(0);
 
   const [editDate, setEditDate] = useState('');
+  const [editTime, setEditTime] = useState('');
   const [editShopName, setEditShopName] = useState('');
   const [editTotalAmount, setEditTotalAmount] = useState<number>(0);
   const [editItems, setEditItems] = useState<GeminiReceiptItem[]>([]);
@@ -91,6 +94,7 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
       setResultsList([]);
       setActiveIndex(0);
       setEditDate('');
+      setEditTime('');
       setEditShopName('');
       setEditTotalAmount(0);
       setEditItems([]);
@@ -112,6 +116,7 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
   const syncFormWithEntry = (entry: { result: GeminiReceiptResult; image: string }) => {
     const data = entry.result;
     setEditDate(data.date);
+    setEditTime(data.time || '');
     setEditShopName(data.shopName);
     setEditTotalAmount(data.totalAmount);
     setEditItems(data.items);
@@ -145,6 +150,7 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
     checkReceiptDuplicates({
       tourId: activeTour?.id,
       date: editDate,
+      time: editTime.trim() || undefined,
       amount: Number(editTotalAmount) || 0,
       place: editShopName,
       category: mapAiCategoryToExpenseCategory(editCategory),
@@ -159,7 +165,7 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, currentResult, isAnalyzing, editDate, editTotalAmount, editShopName, editCategory, currentImage, activeTour?.id]);
+  }, [isOpen, currentResult, isAnalyzing, editDate, editTime, editTotalAmount, editShopName, editCategory, currentImage, activeTour?.id]);
 
   if (!isOpen) return null;
 
@@ -307,6 +313,7 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
       await onSaveToExpense({
         shopName: editShopName || 'レシート経費',
         date: editDate || new Date().toISOString().split('T')[0],
+        time: editTime.trim() || undefined,
         amount: Number(editTotalAmount) || 0,
         category: editCategory,
         items: editItems,
@@ -361,6 +368,7 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
         const isEtc = mapAiCategoryToExpenseCategory(catStr) === 'etc';
         const finalShopName = isCurrentTab ? (editShopName || res.shopName) : res.shopName;
         const finalDate = isCurrentTab ? (editDate || res.date) : res.date;
+        const finalTime = isCurrentTab ? (editTime.trim() || undefined) : res.time;
         const finalAmount = isCurrentTab ? (Number(editTotalAmount) || 0) : (Number(res.totalAmount) || 0);
         const finalItems = isCurrentTab ? editItems : res.items;
         const finalMemo = isCurrentTab ? editMemo.trim() : (res.memo || '');
@@ -370,6 +378,7 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
         await onSaveToExpense({
           shopName: finalShopName || 'レシート経費',
           date: finalDate || new Date().toISOString().split('T')[0],
+          time: finalTime,
           amount: finalAmount,
           category: catStr,
           items: finalItems,
@@ -1201,30 +1210,57 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                   />
                 </div>
 
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.76rem', fontWeight: 600, color: '#94a3b8', marginBottom: '4px' }}>
-                    <Calendar size={12} style={{ display: 'inline', marginRight: '4px' }} />
-                    購入日
-                  </label>
-                  <input
-                    type="date"
-                    value={editDate}
-                    onChange={(e) => {
-                      setEditDate(e.target.value);
-                      updateCurrentEntryResult({ date: e.target.value });
-                    }}
-                    style={{
-                      width: '100%',
-                      padding: '8px 10px',
-                      background: 'rgba(15, 23, 42, 0.7)',
-                      border: '1px solid rgba(255, 255, 255, 0.12)',
-                      borderRadius: '10px',
-                      color: '#ffffff',
-                      fontSize: '0.85rem',
-                      outline: 'none',
-                      boxSizing: 'border-box'
-                    }}
-                  />
+                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '8px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.76rem', fontWeight: 600, color: '#94a3b8', marginBottom: '4px' }}>
+                      <Calendar size={12} style={{ display: 'inline', marginRight: '4px' }} />
+                      購入日
+                    </label>
+                    <input
+                      type="date"
+                      value={editDate}
+                      onChange={(e) => {
+                        setEditDate(e.target.value);
+                        updateCurrentEntryResult({ date: e.target.value });
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '8px 10px',
+                        background: 'rgba(15, 23, 42, 0.7)',
+                        border: '1px solid rgba(255, 255, 255, 0.12)',
+                        borderRadius: '10px',
+                        color: '#ffffff',
+                        fontSize: '0.85rem',
+                        outline: 'none',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.76rem', fontWeight: 600, color: '#94a3b8', marginBottom: '4px' }}>
+                      <Clock size={12} style={{ display: 'inline', marginRight: '4px' }} />
+                      時刻
+                    </label>
+                    <input
+                      type="time"
+                      value={editTime}
+                      onChange={(e) => {
+                        setEditTime(e.target.value);
+                        updateCurrentEntryResult({ time: e.target.value });
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '8px 10px',
+                        background: 'rgba(15, 23, 42, 0.7)',
+                        border: '1px solid rgba(255, 255, 255, 0.12)',
+                        borderRadius: '10px',
+                        color: '#ffffff',
+                        fontSize: '0.85rem',
+                        outline: 'none',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                  </div>
                 </div>
               </div>
 

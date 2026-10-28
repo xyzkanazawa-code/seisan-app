@@ -16,12 +16,27 @@ export interface DuplicateCheckCandidate {
   id?: number | string;
   tourId?: number;
   date: string;
+  time?: string; // 利用時刻 (HH:mm)
   amount: number;
   place: string;
   category?: ExpenseCategory | string;
   invoiceNumber?: string;
   imageUrl?: string;
   imageHash?: string;
+  isDuplicateDismissed?: boolean;
+}
+
+/**
+ * 2つの時刻文字列（HH:mm）の差を分単位で計算
+ */
+export function getTimeDiffMinutes(timeA?: string, timeB?: string): number | null {
+  if (!timeA || !timeB) return null;
+  const matchA = timeA.trim().match(/^([0-2]?[0-9]):([0-5][0-9])/);
+  const matchB = timeB.trim().match(/^([0-2]?[0-9]):([0-5][0-9])/);
+  if (!matchA || !matchB) return null;
+  const minA = parseInt(matchA[1], 10) * 60 + parseInt(matchA[2], 10);
+  const minB = parseInt(matchB[1], 10) * 60 + parseInt(matchB[2], 10);
+  return Math.abs(minA - minB);
 }
 
 /**
@@ -159,6 +174,11 @@ export function evaluateDuplicatePair(
     return null;
   }
 
+  // ユーザーが明示的に確認・解除済みのレシートは重複判定しない
+  if (candidate.isDuplicateDismissed || existing.isDuplicateDismissed) {
+    return null;
+  }
+
   const reasons: string[] = [];
   const isEtcPair = candidate.category === 'etc' || existing.category === 'etc';
 
@@ -205,6 +225,15 @@ export function evaluateDuplicatePair(
     return null;
   }
 
+  // 利用時刻（HH:mm）の比較：両方に時刻が印字・記録されている場合
+  const timeDiff = getTimeDiffMinutes(candidate.time, existing.time);
+  if (timeDiff !== null) {
+    // 10分以上離れている場合：同じ店・同じ金額であっても別時間帯の利用（朝とお昼、行きと帰りなど）として重複判定から除外！
+    if (timeDiff >= 10) {
+      return null;
+    }
+  }
+
   // ETCの場合：同じ高速区間（往復等）の利用が多いため、画像が同一でない場合は控えめ扱い（low）
   if (isEtcPair) {
     if (isSameDate && isSameAmount && placeMatched) {
@@ -218,6 +247,9 @@ export function evaluateDuplicatePair(
   // - 利用日一致 + 金額一致 + (店舗名類似 または インボイス番号一致)
   if (isSameDate && isSameAmount && (placeMatched || invoiceMatched)) {
     reasons.push(`利用日(${existing.date})と金額(¥${existingAmount.toLocaleString()})が一致`);
+    if (existing.time && timeDiff !== null && timeDiff < 10) {
+      reasons.push(`利用時刻(${existing.time})も一致/近接`);
+    }
     if (placeMatched) reasons.push(`利用場所「${existing.place}」が一致・類似`);
     if (invoiceMatched) reasons.push(`インボイス番号(${normExistInv})が一致`);
     return { confidence: 'high', reasons, isEtc: false };
@@ -324,6 +356,11 @@ export function findDuplicateGroupsInTour(
       const rB = receipts[j];
       if (!rA.id || !rB.id) continue;
 
+      // ユーザーが解除済みのレシートは重複から除外
+      if (rA.isDuplicateDismissed || rB.isDuplicateDismissed) {
+        continue;
+      }
+
       // ETCの分割明細（同一レシートから分割された別区間）は重複から除外
       if (
         rA.category === 'etc' &&
@@ -340,12 +377,14 @@ export function findDuplicateGroupsInTour(
           id: rA.id,
           tourId: rA.tourId,
           date: rA.date,
+          time: rA.time,
           amount: rA.amount,
           place: rA.place,
           category: rA.category,
           invoiceNumber: rA.invoiceNumber,
           imageUrl: rA.originalImageUrl || rA.processedImageUrl,
-          imageHash: rA.imageHash
+          imageHash: rA.imageHash,
+          isDuplicateDismissed: rA.isDuplicateDismissed
         },
         rB,
         rA.imageHash,

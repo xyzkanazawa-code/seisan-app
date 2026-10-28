@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Calendar, DollarSign, MapPin, Tag, CreditCard, AlertTriangle, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { X, Plus, Calendar, Clock, DollarSign, MapPin, Tag, CreditCard, AlertTriangle, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { db, type Tour, type ExpenseCategory, type PaymentMethod, type Receipt } from '../db';
 import { extractInvoiceNumbers } from '../utils/invoiceValidator';
 import { learnFromReceipt } from '../utils/learningService';
@@ -24,6 +24,7 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
   const [etcPaidByGuide, setEtcPaidByGuide] = useState<boolean>(false);
   const [advanceRemaining, setAdvanceRemaining] = useState<number | null>(null);
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [time, setTime] = useState('');
   const [amount, setAmount] = useState<number | ''>('');
   const [place, setPlace] = useState('');
   const [invoiceNumber, setInvoiceNumber] = useState('');
@@ -81,6 +82,7 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
     checkReceiptDuplicates({
       tourId: activeTour?.id,
       date,
+      time: time.trim() || undefined,
       amount: Number(amount),
       place: place.trim(),
       category,
@@ -94,7 +96,7 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, activeTour?.id, date, amount, place, category, invoiceNumber]);
+  }, [isOpen, activeTour?.id, date, time, amount, place, category, invoiceNumber]);
 
   if (!isOpen) return null;
 
@@ -169,6 +171,7 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
               : 'company_etc'
             : paymentMethod,
         date,
+        time: time.trim() || undefined,
         amount: Number(amount),
         place: place.trim() || (category === 'etc' ? 'ETC高速料金' : 'その他経費'),
         invoiceNumber: formattedInvoice,
@@ -291,18 +294,33 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
                 </div>
               </div>
 
-              <div className="form-group">
-                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <Calendar size={14} />
-                  利用日 *
-                </label>
-                <input
-                  type="date"
-                  className="form-input"
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  required
-                />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <Calendar size={14} />
+                    利用日 *
+                  </label>
+                  <input
+                    type="date"
+                    className="form-input"
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <Clock size={14} />
+                    利用時刻
+                  </label>
+                  <input
+                    type="time"
+                    className="form-input"
+                    value={time}
+                    onChange={(e) => setTime(e.target.value)}
+                    placeholder="例: 12:34"
+                  />
+                </div>
               </div>
             </div>
 

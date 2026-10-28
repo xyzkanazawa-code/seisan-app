@@ -8,6 +8,7 @@ export interface GeminiReceiptItem {
 
 export interface GeminiReceiptResult {
   date: string;          // YYYY-MM-DD
+  time?: string;         // 利用時刻 (HH:mm)
   shopName: string;      // 店名・料金所名
   items: GeminiReceiptItem[]; // 品目・内訳リスト
   totalAmount: number;   // 合計金額
@@ -169,21 +170,23 @@ export async function analyzeReceiptsWithGemini(
 
 【各レシートの抽出項目】
 1. date: 利用日・購入日。必ず "YYYY-MM-DD" 形式（例: "2026-10-09"）。年がない場合は今年（2026年）を補完。
-2. shopName: 店舗名・料金所名・区間名（ETCの場合は "ETC: 東京 → 厚木IC" のように区間がわかる名称にしてください）。
-3. entryGate: ETCの場合の入口料金所名（例: "東京", "厚木"）。不明なら空文字。
-4. exitGate: ETCの場合の出口料金所名（例: "沼津", "小田原"）。不明なら空文字。
-5. items: 内訳リスト [{ "name": "品目名または区間名", "price": 数値 }]。
-6. totalAmount: その区間・レシートの支払金額（半角数値）。
-7. category: 経費カテゴリ（"ETC" | "駐車場" | "燃料" | "有料道路" | "朝食代" | "昼食代" | "夜食代" | "お茶代" | "ミネラルウォーター" | "残業代" | "タクシー" | "宿泊" | "その他"）。
-8. paymentMethod: 支払方法（"会社ETC" | "前払い金" | "現金" | "会社カード" | "燃料カード" | "その他"）。ETCの場合は "会社ETC"。
-9. invoiceNumber: インボイス登録番号（"T" + 13桁の数字）。なければ空文字。
-10. splitBox: 縦に連続したレシートの場合、その区間が画像全体の縦方向のどの位置にあるか（0.0〜1.0）。例: {"topPct": 0.0, "bottomPct": 0.5}。1枚だけなら {"topPct": 0.0, "bottomPct": 1.0}。
+2. time: 利用時刻・購入時刻。必ず "HH:mm" 形式（例: "12:34", "08:15"）。レシートに時刻の印字があれば抽出。なければ空文字。
+3. shopName: 店舗名・料金所名・区間名（ETCの場合は "ETC: 東京 → 厚木IC" のように区間がわかる名称にしてください）。
+4. entryGate: ETCの場合の入口料金所名（例: "東京", "厚木"）。不明なら空文字。
+5. exitGate: ETCの場合の出口料金所名（例: "沼津", "小田原"）。不明なら空文字。
+6. items: 内訳リスト [{ "name": "品目名または区間名", "price": 数値 }]。
+7. totalAmount: その区間・レシートの支払金額（半角数値）。
+8. category: 経費カテゴリ（"ETC" | "駐車場" | "燃料" | "有料道路" | "朝食代" | "昼食代" | "夜食代" | "お茶代" | "ミネラルウォーター" | "残業代" | "タクシー" | "宿泊" | "その他"）。
+9. paymentMethod: 支払方法（"会社ETC" | "前払い金" | "現金" | "会社カード" | "燃料カード" | "その他"）。ETCの場合は "会社ETC"。
+10. invoiceNumber: インボイス登録番号（"T" + 13桁の数字）。なければ空文字。
+11. splitBox: 縦に連続したレシートの場合、その区間が画像全体の縦方向のどの位置にあるか（0.0〜1.0）。例: {"topPct": 0.0, "bottomPct": 0.5}。1枚だけなら {"topPct": 0.0, "bottomPct": 1.0}。
 
 【返却JSONスキーマ】
 {
   "receipts": [
     {
       "date": "2026-10-09",
+      "time": "12:34",
       "shopName": "ETC: 東京 → 海老名IC",
       "entryGate": "東京",
       "exitGate": "海老名",

@@ -8,6 +8,7 @@ export interface ParsedReceiptItem {
   category: ExpenseCategory;
   paymentMethod: PaymentMethod;
   date: string;
+  time?: string;
   amount: number;
   place: string;
   invoiceNumber?: string;
@@ -36,6 +37,36 @@ function normalizeDigits(str: string): string {
     .replace(/[０-９]/g, (s) => String.fromCharCode(s.charCodeAt(0) - 0xfee0))
     .replace(/[￥]/g, '¥');
 }
+
+/**
+ * レシート印字テキストから利用時刻（HH:mm）を抽出
+ * 例: "12:34", "2026/10/10 13:45", "11時20分"
+ */
+export function extractTimeFromReceiptText(text: string): string | undefined {
+  if (!text) return undefined;
+  const timeMatch = text.match(/(?:^|[\s\r\n]|[0-9]{2,4}[/-][0-9]{1,2}[/-][0-9]{1,2}[\s　]+)([0-2]?[0-9])[:時]([0-5][0-9])/);
+  if (timeMatch) {
+    const hour = parseInt(timeMatch[1], 10);
+    const minute = parseInt(timeMatch[2], 10);
+    if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+      return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * レシート印字テキストから利用時刻（時 0〜23）を抽出
+ * 例: "12:34", "2026/10/10 13:45", "11時20分"
+ */
+function extractHourFromReceiptText(text: string): number | null {
+  const time = extractTimeFromReceiptText(text);
+  if (time) {
+    return parseInt(time.split(':')[0], 10);
+  }
+  return null;
+}
+
 
 /**
  * テキストから金額を抽出（パーキング・タクシー・高速・燃料に特化）
@@ -471,18 +502,6 @@ export function detectCategoryAndPlace(rawText: string): {
     };
   }
 
-/**
- * レシート印字テキストから利用時刻（時 0〜23）を抽出
- * 例: "12:34", "2026/10/10 13:45", "11時20分"
- */
-function extractHourFromReceiptText(text: string): number | null {
-  const timeMatch = text.match(/(?:^|[\s\r\n]|[0-9]{2,4}[/-][0-9]{1,2}[/-][0-9]{1,2}[\s　]+)([0-2]?[0-9])[:時]([0-5][0-9])/);
-  if (timeMatch) {
-    const hour = parseInt(timeMatch[1], 10);
-    if (hour >= 0 && hour <= 23) return hour;
-  }
-  return null;
-}
 
   // 7. 飲食・食事・飲料・コンビニのスマート判定（AIヒューリスティック推論）
   const isConvenience =
@@ -858,6 +877,7 @@ export async function analyzeReceiptImage(
   }
 
   const date = extractDate(extractedText);
+  const time = extractTimeFromReceiptText(extractedText);
   const amount = extractAmount(extractedText);
 
   // インボイス番号の検出と妥当性チェック
@@ -876,6 +896,7 @@ export async function analyzeReceiptImage(
       category,
       paymentMethod,
       date,
+      time,
       amount: amount || 0,
       place,
       invoiceNumber: finalInvoiceNumber,

@@ -54,6 +54,7 @@ export interface Receipt {
   category: ExpenseCategory;  // ETC / 駐車場 / 燃料 / その他
   paymentMethod: PaymentMethod; // 現金立替 / 会社ETC / 燃料カード / 会社カード
   date: string;               // 発生日 (YYYY-MM-DD)
+  time?: string;              // 発生時刻 (HH:mm)
   amount: number;             // 金額（税込）
   place: string;              // 店舗名 / 料金所名
   invoiceNumber?: string;     // 適格請求書番号 (T+13桁)
@@ -67,6 +68,7 @@ export interface Receipt {
   etcPaidByGuide?: boolean;   // ガイド預り金から引くかどうか (true: 預り金から引く, false: 引かない(会社ETC等))
   memo?: string;              // 備考（手入力）
   aiMemo?: string;            // AI読取項目（品目・OCR解析情報）
+  isDuplicateDismissed?: boolean; // ユーザーが「重複ではない」と確認して警告を解除したフラグ
   createdAt: number;
 }
 

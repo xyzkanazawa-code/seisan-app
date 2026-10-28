@@ -300,6 +300,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
               category: detectedCategory,
               paymentMethod: detectedPayment,
               date: geminiResult.date,
+              time: geminiResult.time,
               amount: geminiResult.totalAmount,
               place: geminiResult.shopName,
               invoiceNumber: primaryInvoice?.normalizedNumber || invoiceNum,

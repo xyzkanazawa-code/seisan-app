@@ -79,6 +79,23 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
     }
   };
 
+  // 重複警告の解除（「別物として確認済みにする」）
+  const handleDismissDuplicate = async (id?: number) => {
+    if (!id) return;
+    await db.receipts.update(id, { isDuplicateDismissed: true });
+    loadReceipts();
+  };
+
+  // すべての重複警告を一括解除
+  const handleDismissAllDuplicates = async () => {
+    const duplicateIds = Array.from(duplicateMap.keys());
+    if (duplicateIds.length === 0) return;
+    await Promise.all(
+      duplicateIds.map((id) => db.receipts.update(id, { isDuplicateDismissed: true }))
+    );
+    loadReceipts();
+  };
+
   // ETCの実車・回送の切り替え（ワンタップ）
   const handleToggleEtcType = async (receipt: Receipt) => {
     if (!receipt.id) return;
@@ -781,25 +798,44 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
               ⚠️ 二重登録の疑いがあるレシートが <strong>{severeDuplicateCount}件</strong> あります！（同じ日付・金額・店舗または画像）
             </span>
           </div>
-          <button
-            type="button"
-            onClick={() =>
-              setActiveCategoryFilter(activeCategoryFilter === 'duplicate' ? 'all' : 'duplicate')
-            }
-            style={{
-              padding: '5px 12px',
-              borderRadius: 'var(--radius-full)',
-              fontSize: '0.74rem',
-              fontWeight: 800,
-              background: activeCategoryFilter === 'duplicate' ? '#f59e0b' : 'rgba(245, 158, 11, 0.3)',
-              color: activeCategoryFilter === 'duplicate' ? '#0f172a' : '#fef08a',
-              border: '1px solid rgba(245, 158, 11, 0.6)',
-              cursor: 'pointer',
-              whiteSpace: 'nowrap'
-            }}
-          >
-            {activeCategoryFilter === 'duplicate' ? 'すべて表示に戻す' : `重複候補のみ表示 (${severeDuplicateCount})`}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={handleDismissAllDuplicates}
+              style={{
+                padding: '5px 12px',
+                borderRadius: 'var(--radius-full)',
+                fontSize: '0.74rem',
+                fontWeight: 800,
+                background: 'rgba(16, 185, 129, 0.22)',
+                color: '#a7f3d0',
+                border: '1px solid rgba(16, 185, 129, 0.55)',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              ✓ 全て別物として確認（警告を消す）
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setActiveCategoryFilter(activeCategoryFilter === 'duplicate' ? 'all' : 'duplicate')
+              }
+              style={{
+                padding: '5px 12px',
+                borderRadius: 'var(--radius-full)',
+                fontSize: '0.74rem',
+                fontWeight: 800,
+                background: activeCategoryFilter === 'duplicate' ? '#f59e0b' : 'rgba(245, 158, 11, 0.3)',
+                color: activeCategoryFilter === 'duplicate' ? '#0f172a' : '#fef08a',
+                border: '1px solid rgba(245, 158, 11, 0.6)',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              {activeCategoryFilter === 'duplicate' ? 'すべて表示に戻す' : `重複候補のみ表示 (${severeDuplicateCount})`}
+            </button>
+          </div>
         </div>
       ) : duplicateMap.size > 0 ? (
         /* ETCのみの同一区間重複（控えめなお知らせ） */
@@ -969,23 +1005,42 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
                             : dupEntry.reasons.join(' / ')}
                         </span>
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteReceipt(r.id)}
-                        style={{
-                          padding: '2px 8px',
-                          borderRadius: 4,
-                          background: 'rgba(239, 68, 68, 0.2)',
-                          border: '1px solid rgba(239, 68, 68, 0.45)',
-                          color: '#fca5a5',
-                          fontSize: '0.7rem',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                          whiteSpace: 'nowrap'
-                        }}
-                      >
-                        この明細を削除
-                      </button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => handleDismissDuplicate(r.id)}
+                          style={{
+                            padding: '2px 8px',
+                            borderRadius: 4,
+                            background: 'rgba(16, 185, 129, 0.2)',
+                            border: '1px solid rgba(16, 185, 129, 0.5)',
+                            color: '#a7f3d0',
+                            fontSize: '0.7rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          ✓ 別物として確認
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteReceipt(r.id)}
+                          style={{
+                            padding: '2px 8px',
+                            borderRadius: 4,
+                            background: 'rgba(239, 68, 68, 0.2)',
+                            border: '1px solid rgba(239, 68, 68, 0.45)',
+                            color: '#fca5a5',
+                            fontSize: '0.7rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          この明細を削除
+                        </button>
+                      </div>
                     </div>
                   )
                 )}
@@ -1137,7 +1192,7 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
                           : '会社カード'}
                       </span>
                       <span style={{ fontSize: '0.72rem', color: 'var(--text-sub)' }}>
-                        {r.date}
+                        {r.date}{r.time ? ` ${r.time}` : ''}
                       </span>
                     </div>
 

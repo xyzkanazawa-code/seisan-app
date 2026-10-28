@@ -156,6 +156,7 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
         const dbMatches = await checkReceiptDuplicates({
           tourId: activeTour?.id,
           date: it.date,
+          time: it.time,
           amount: Number(it.amount) || 0,
           place: it.place,
           category: it.category,
@@ -184,6 +185,7 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
             {
               tourId: activeTour?.id,
               date: it.date,
+              time: it.time,
               amount: Number(it.amount) || 0,
               place: it.place,
               category: it.category,
@@ -195,6 +197,7 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
               category: prev.category,
               paymentMethod: prev.paymentMethod,
               date: prev.date,
+              time: prev.time,
               amount: Number(prev.amount) || 0,
               place: prev.place,
               invoiceNumber: prev.invoiceNumber,
@@ -310,6 +313,7 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
                 : 'company_etc'
               : item.paymentMethod,
           date: item.date,
+          time: item.time,
           amount: Number(item.amount) || 0,
           place: item.place || '経費',
           invoiceNumber: item.invoiceNumber,
