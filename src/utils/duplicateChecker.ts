@@ -298,8 +298,14 @@ export function evaluateDuplicatePair(
     reasons.push(`利用日(${existing.date})と金額(¥${existingAmount.toLocaleString()})が一致`);
     if (placeMatched) reasons.push(`利用場所「${existing.place}」が一致`);
     if (invoiceMatched) reasons.push(`インボイス番号(${normExistInv})が一致`);
-    if (existing.time && timeDiff !== null && timeDiff < 10) {
-      reasons.push(`利用時刻(${existing.time})も一致/近接`);
+    if (existing.time && timeDiff !== null) {
+      if (timeDiff === 0) {
+        reasons.push(`利用時刻(${existing.time})が完全一致（同一利用の二重登録の可能性大）`);
+      } else if (timeDiff < 10) {
+        reasons.push(`利用時刻(${existing.time})も近接（${timeDiff}分差）`);
+      }
+    } else if (existing.time && !candidate.time) {
+      reasons.push(`登録済みの利用時刻は「${existing.time}」です（別時間帯の利用の場合は時刻を入力してください）`);
     }
     return { confidence: 'high', reasons, isEtc: false };
   }

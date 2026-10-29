@@ -4,6 +4,7 @@
 
 export interface HasReceiptSortFields {
   date?: string;
+  time?: string;
   createdAt?: number;
   category?: string;
   id?: number | string;
@@ -26,8 +27,8 @@ export const CATEGORY_ORDER: Record<string, number> = {
 };
 
 /**
- * レシートを常に日付が新しい順（降順：新しい日付が上）にソートする比較関数
- * 同一日の場合はカテゴリ順、さらに同じ場合は作成日時が新しい順
+ * レシートを常に日付・時刻が新しい順（降順：新しい日付・時刻が上）にソートする比較関数
+ * 同一日の場合は時刻順、さらに同じ場合はカテゴリ順、作成日時が新しい順
  */
 export function compareReceiptsByDate<T extends HasReceiptSortFields>(a: T, b: T): number {
   const dateA = (a.date || '').trim();
@@ -42,7 +43,16 @@ export function compareReceiptsByDate<T extends HasReceiptSortFields>(a: T, b: T
     return dateB.localeCompare(dateA);
   }
 
-  // 同一日付の場合：カテゴリ順
+  // 同一日付の場合：時刻があれば時刻降順（新しい時刻が上）
+  const timeA = (a.time || '').trim();
+  const timeB = (b.time || '').trim();
+  if (timeA && timeB && timeA !== timeB) {
+    return timeB.localeCompare(timeA);
+  }
+  if (timeA && !timeB) return -1;
+  if (!timeA && timeB) return 1;
+
+  // カテゴリ順
   const catA = a.category ? (CATEGORY_ORDER[a.category] || 99) : 99;
   const catB = b.category ? (CATEGORY_ORDER[b.category] || 99) : 99;
   if (catA !== catB) {

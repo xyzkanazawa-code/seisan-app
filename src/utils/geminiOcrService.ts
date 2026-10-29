@@ -189,7 +189,11 @@ export async function analyzeReceiptsWithGemini(
 
 【各レシートの共通抽出項目】
 1. date: 利用日・精算日。"YYYY-MM-DD" 形式（例: "2026-10-28"）。年がなければ今年（2026年）を補完。
-2. time: 利用時刻・精算時刻。"HH:mm" 形式（例: "14:35", "09:10"）。印字があれば必ず抽出。なければ空文字。
+2. time: 利用時刻・精算時刻。"HH:mm" 形式（例: "14:35", "09:10"）。
+   - レシートに印字されている「精算日時」「領収日時」「出庫時刻」「通過時刻」「発行日時」「利用日時」等から時刻（時・分）を必ず抽出してください。
+   - 駐車場の場合は「精算時刻」または「出庫時刻」を優先して抽出。
+   - ETCの場合は出口IC通過時刻または利用時刻を抽出。
+   - レシートに時刻印字がある場合は絶対に漏らさず "HH:mm" で抽出してください。印字が見当たらない場合のみ空文字 "" としてください。
 3. shopName: 店舗名・駐車場名・施設名・利用場所名。
 4. totalAmount: 実際に支払った合計金額（半角数値）。必ず数値を抽出してください。
 5. category: 経費カテゴリ（"駐車場" | "燃料" | "有料道路" | "ETC" | "朝食代" | "昼食代" | "夜食代" | "お茶代" | "ミネラルウォーター" | "残業代" | "タクシー" | "宿泊" | "その他"）。
@@ -420,7 +424,17 @@ export async function analyzeReceiptsWithGemini(
     // 時刻 (HH:mm) の正規化
     let parsedTime: string | undefined = undefined;
     if (typeof item.time === 'string' && item.time.trim()) {
-      const tm = item.time.trim().match(/(?:^|[\sT])([0-2]?[0-9])[:時]([0-5][0-9])/);
+      const tm = item.time.trim().match(/(?:^|[\sT])([0-2]?[0-9])[:時.]([0-5][0-9])/);
+      if (tm) {
+        const hh = tm[1].padStart(2, '0');
+        const mm = tm[2];
+        parsedTime = `${hh}:${mm}`;
+      }
+    }
+
+    // もし item.time から抽出できず、item.date に時刻が含まれている場合のフォールバック（例: "2026-10-28 14:35"）
+    if (!parsedTime && typeof item.date === 'string') {
+      const tm = item.date.match(/(?:[\sT])([0-2]?[0-9])[:時.]([0-5][0-9])/);
       if (tm) {
         const hh = tm[1].padStart(2, '0');
         const mm = tm[2];

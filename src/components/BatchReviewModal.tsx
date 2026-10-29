@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   Trash2,
   Calendar,
+  Clock,
   DollarSign,
   MapPin,
   Tag,
@@ -51,6 +52,14 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
     Record<string, { dbMatches: DuplicateMatch[]; batchMatchIndex?: number; batchReasons?: string[] }>
   >({});
   const [dismissedDuplicateIds, setDismissedDuplicateIds] = useState<string[]>([]);
+
+  // 現在時刻（HH:mm）を取得するヘルパー
+  const getCurrentTimeString = (): string => {
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    return `${hh}:${mm}`;
+  };
 
   // ワンタップ斜め・台形・余白自動カット
   const handleQuickTighten = async (item: ParsedReceiptItem) => {
@@ -635,7 +644,8 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
                     {dupInfo.dbMatches.map((m, mIdx) => (
                       <div key={mIdx}>
                         {m.isSameTour ? '【現在運行内】' : `【別ツアー ${m.tourCode || ''}】`}{' '}
-                        {m.existingReceipt.date} / {m.existingReceipt.place} / ¥{m.existingReceipt.amount.toLocaleString()}（{m.reasons.join(' / ')}）
+                        {m.existingReceipt.date}
+                        {m.existingReceipt.time ? ` ${m.existingReceipt.time}` : ''} / {m.existingReceipt.place} / ¥{m.existingReceipt.amount.toLocaleString()}（{m.reasons.join(' / ')}）
                       </div>
                     ))}
                   </div>
@@ -903,65 +913,66 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
                 </div>
               </div>
 
-              {/* 中段：編集可能な項目（金額、日付、場所、科目、支払種別） */}
+              {/* 中段：編集可能な項目（金額、日付、利用時刻、場所、科目、支払種別） */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {/* 金額 & 日付 */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 10 }}>
-                  <div className="form-group">
-                    <label
-                      className="form-label"
-                      style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                {/* 金額 */}
+                <div className="form-group">
+                  <label
+                    className="form-label"
+                    style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                  >
+                    <DollarSign size={14} />
+                    支払金額 (税込)
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <span
+                      style={{
+                        position: 'absolute',
+                        left: 12,
+                        top: 13,
+                        fontFamily: 'var(--font-num)',
+                        fontWeight: 700,
+                        color: '#60a5fa'
+                      }}
                     >
-                      <DollarSign size={14} />
-                      支払金額 (税込)
-                    </label>
-                    <div style={{ position: 'relative' }}>
-                      <span
-                        style={{
-                          position: 'absolute',
-                          left: 12,
-                          top: 13,
-                          fontFamily: 'var(--font-num)',
-                          fontWeight: 700,
-                          color: '#60a5fa'
-                        }}
-                      >
-                        ¥
-                      </span>
-                      <input
-                        type="number"
-                        className="form-input"
-                        style={{
-                          paddingLeft: 28,
-                          fontFamily: 'var(--font-num)',
-                          fontSize: '1.15rem',
-                          fontWeight: 800,
-                          color: item.amount === 0 ? '#f87171' : '#ffffff',
-                          borderColor: item.amount === 0 ? '#ef4444' : undefined
-                        }}
-                        placeholder="0"
-                        value={item.amount || ''}
-                        onChange={(e) => updateItem(item.id, { amount: Number(e.target.value) })}
-                      />
-                    </div>
-                    {(!item.amount || item.amount === 0) && (
-                      <div
-                        style={{
-                          fontSize: '0.7rem',
-                          color: '#f87171',
-                          marginTop: 4,
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 4
-                        }}
-                      >
-                        <AlertCircle size={12} />
-                        金額を入力してください
-                      </div>
-                    )}
+                      ¥
+                    </span>
+                    <input
+                      type="number"
+                      className="form-input"
+                      style={{
+                        paddingLeft: 28,
+                        fontFamily: 'var(--font-num)',
+                        fontSize: '1.15rem',
+                        fontWeight: 800,
+                        color: item.amount === 0 ? '#f87171' : '#ffffff',
+                        borderColor: item.amount === 0 ? '#ef4444' : undefined
+                      }}
+                      placeholder="0"
+                      value={item.amount || ''}
+                      onChange={(e) => updateItem(item.id, { amount: Number(e.target.value) })}
+                    />
                   </div>
+                  {(!item.amount || item.amount === 0) && (
+                    <div
+                      style={{
+                        fontSize: '0.7rem',
+                        color: '#f87171',
+                        marginTop: 4,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4
+                      }}
+                    >
+                      <AlertCircle size={12} />
+                      金額を入力してください
+                    </div>
+                  )}
+                </div>
 
-                  <div className="form-group">
+                {/* 利用日 & 利用時刻 */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
                     <label
                       className="form-label"
                       style={{ display: 'flex', alignItems: 'center', gap: 4 }}
@@ -975,6 +986,74 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
                       value={item.date}
                       onChange={(e) => updateItem(item.id, { date: e.target.value })}
                     />
+                  </div>
+
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        marginBottom: 4
+                      }}
+                    >
+                      <label
+                        className="form-label"
+                        style={{ display: 'flex', alignItems: 'center', gap: 4, margin: 0 }}
+                      >
+                        <Clock size={14} />
+                        利用時刻
+                      </label>
+                      <button
+                        type="button"
+                        title="現在の時刻を入力"
+                        onClick={() => updateItem(item.id, { time: getCurrentTimeString() })}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 2,
+                          fontSize: '0.7rem',
+                          padding: '2px 7px',
+                          background: 'rgba(59, 130, 246, 0.15)',
+                          color: '#60a5fa',
+                          border: '1px solid rgba(59, 130, 246, 0.35)',
+                          borderRadius: 6,
+                          cursor: 'pointer',
+                          fontWeight: 600
+                        }}
+                      >
+                        今
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <input
+                        type="time"
+                        className="form-input"
+                        value={item.time || ''}
+                        placeholder="HH:mm"
+                        onChange={(e) => updateItem(item.id, { time: e.target.value })}
+                        style={{ flex: 1 }}
+                      />
+                      {item.time && (
+                        <button
+                          type="button"
+                          title="時刻を消去"
+                          onClick={() => updateItem(item.id, { time: undefined })}
+                          style={{
+                            padding: '8px 10px',
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            borderRadius: 8,
+                            color: '#94a3b8',
+                            cursor: 'pointer',
+                            fontSize: '0.75rem',
+                            lineHeight: 1
+                          }}
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
 

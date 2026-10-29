@@ -1324,29 +1324,77 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                     />
                   </div>
                   <div>
-                    <label style={{ display: 'block', fontSize: '0.76rem', fontWeight: 600, color: '#94a3b8', marginBottom: '4px' }}>
-                      <Clock size={12} style={{ display: 'inline', marginRight: '4px' }} />
-                      時刻
-                    </label>
-                    <input
-                      type="time"
-                      value={editTime}
-                      onChange={(e) => {
-                        setEditTime(e.target.value);
-                        updateCurrentEntryResult({ time: e.target.value });
-                      }}
-                      style={{
-                        width: '100%',
-                        padding: '8px 10px',
-                        background: 'rgba(15, 23, 42, 0.7)',
-                        border: '1px solid rgba(255, 255, 255, 0.12)',
-                        borderRadius: '10px',
-                        color: '#ffffff',
-                        fontSize: '0.85rem',
-                        outline: 'none',
-                        boxSizing: 'border-box'
-                      }}
-                    />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <label style={{ display: 'block', fontSize: '0.76rem', fontWeight: 600, color: '#94a3b8', margin: 0 }}>
+                        <Clock size={12} style={{ display: 'inline', marginRight: '4px' }} />
+                        時刻
+                      </label>
+                      <button
+                        type="button"
+                        title="現在の時刻を入力"
+                        onClick={() => {
+                          const now = new Date();
+                          const t = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+                          setEditTime(t);
+                          updateCurrentEntryResult({ time: t });
+                        }}
+                        style={{
+                          fontSize: '0.7rem',
+                          padding: '2px 7px',
+                          background: 'rgba(59, 130, 246, 0.2)',
+                          color: '#60a5fa',
+                          border: '1px solid rgba(59, 130, 246, 0.4)',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          fontWeight: 600
+                        }}
+                      >
+                        今
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                      <input
+                        type="time"
+                        value={editTime}
+                        onChange={(e) => {
+                          setEditTime(e.target.value);
+                          updateCurrentEntryResult({ time: e.target.value });
+                        }}
+                        style={{
+                          flex: 1,
+                          padding: '8px 10px',
+                          background: 'rgba(15, 23, 42, 0.7)',
+                          border: '1px solid rgba(255, 255, 255, 0.12)',
+                          borderRadius: '10px',
+                          color: '#ffffff',
+                          fontSize: '0.85rem',
+                          outline: 'none',
+                          boxSizing: 'border-box'
+                        }}
+                      />
+                      {editTime && (
+                        <button
+                          type="button"
+                          title="時刻を消去"
+                          onClick={() => {
+                            setEditTime('');
+                            updateCurrentEntryResult({ time: undefined });
+                          }}
+                          style={{
+                            padding: '8px 10px',
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            border: '1px solid rgba(255, 255, 255, 0.12)',
+                            borderRadius: '10px',
+                            color: '#94a3b8',
+                            cursor: 'pointer',
+                            fontSize: '0.75rem',
+                            lineHeight: 1
+                          }}
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>

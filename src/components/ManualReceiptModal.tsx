@@ -310,17 +310,64 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
                   />
                 </div>
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <Clock size={14} />
-                    利用時刻
-                  </label>
-                  <input
-                    type="time"
-                    className="form-input"
-                    value={time}
-                    onChange={(e) => setTime(e.target.value)}
-                    placeholder="例: 12:34"
-                  />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 4, margin: 0 }}>
+                      <Clock size={14} />
+                      利用時刻
+                    </label>
+                    <button
+                      type="button"
+                      title="現在の時刻を入力"
+                      onClick={() => {
+                        const now = new Date();
+                        setTime(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
+                      }}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 2,
+                        fontSize: '0.7rem',
+                        padding: '2px 7px',
+                        background: 'rgba(59, 130, 246, 0.15)',
+                        color: '#60a5fa',
+                        border: '1px solid rgba(59, 130, 246, 0.35)',
+                        borderRadius: 6,
+                        cursor: 'pointer',
+                        fontWeight: 600
+                      }}
+                    >
+                      今
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <input
+                      type="time"
+                      className="form-input"
+                      value={time}
+                      onChange={(e) => setTime(e.target.value)}
+                      placeholder="例: 12:34"
+                      style={{ flex: 1 }}
+                    />
+                    {time && (
+                      <button
+                        type="button"
+                        title="時刻を消去"
+                        onClick={() => setTime('')}
+                        style={{
+                          padding: '8px 10px',
+                          background: 'rgba(255, 255, 255, 0.05)',
+                          border: '1px solid rgba(255, 255, 255, 0.1)',
+                          borderRadius: 8,
+                          color: '#94a3b8',
+                          cursor: 'pointer',
+                          fontSize: '0.75rem',
+                          lineHeight: 1
+                        }}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

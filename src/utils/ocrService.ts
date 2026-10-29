@@ -39,13 +39,51 @@ function normalizeDigits(str: string): string {
 }
 
 /**
- * レシート印字テキストから利用時刻（HH:mm）を抽出
- * 例: "12:34", "2026/10/10 13:45", "11時20分"
+ * レシート印字テキストから利用時刻（HH:mm）を高精度に抽出
+ * 例: "12:34", "2026/10/10 13:45", "11時20分", "精算日時 14:35:12", "出庫 15:20"
  */
 export function extractTimeFromReceiptText(text: string): string | undefined {
   if (!text) return undefined;
-  // 1. 午前/午後/AM/PM 付きの表記
-  const ampmMatch = text.match(/(?:午前|午後|AM|PM)[\s　]*([0-1]?[0-9])[:時]([0-5][0-9])/i);
+  // 全角英数の半角化・全角記号の正規化
+  let cleanText = normalizeDigits(text)
+    .replace(/[：]/g, ':')
+    .replace(/[　]/g, ' ');
+
+  // 1. 最優先：精算日時・出庫・領収日時・通過時刻等の明確な利用/精算キーワードに付随する時刻
+  // 例: 「精算日時 14:35」「出庫 15:20」「領収時刻 09:40」「通過 11:25」「発行日時 2026/10/28 16:30」
+  const keywordMatches = cleanText.matchAll(
+    /(?:精算|出庫|領収|通過|利用|発行|受付)[\s:：]*(?:日時|時刻|時間)?(?:[\s:：]*[0-9]{2,4}[/-][0-9]{1,2}[/-][0-9]{1,2}[\s\-]*)?[\s:：]*(?:午前|午後|AM|PM)?[\s:：]*([0-2]?[0-9])[:時.]([0-5][0-9])(?:[:分秒]|$|\s|[0-5][0-9])/gi
+  );
+  for (const match of keywordMatches) {
+    let hour = parseInt(match[1], 10);
+    const minute = parseInt(match[2], 10);
+    const matchedSegment = match[0];
+    const isPm = /午後|PM/i.test(matchedSegment);
+    if (isPm && hour < 12) hour += 12;
+    if (!isPm && /午前|AM/i.test(matchedSegment) && hour === 12) hour = 0;
+    if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+      return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    }
+  }
+
+  // 2. 日付・曜日直後の時刻
+  // 例: "2026/10/28 14:35", "10/28(水) 14:35", "2026年10月28日 14時35分"
+  const dateFollowMatch = cleanText.match(
+    /(?:[0-9]{2,4}[年/-][0-9]{1,2}[月/-][0-9]{1,2}日?|[0-9]{1,2}[月/-][0-9]{1,2}日?)(?:\([月火水木金土日]\))?[\s　]+(?:午前|午後|AM|PM)?[\s　]*([0-2]?[0-9])[:時.]([0-5][0-9])/i
+  );
+  if (dateFollowMatch) {
+    let hour = parseInt(dateFollowMatch[1], 10);
+    const minute = parseInt(dateFollowMatch[2], 10);
+    const isPm = /午後|PM/i.test(dateFollowMatch[0]);
+    if (isPm && hour < 12) hour += 12;
+    if (!isPm && /午前|AM/i.test(dateFollowMatch[0]) && hour === 12) hour = 0;
+    if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+      return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    }
+  }
+
+  // 3. 午前/午後/AM/PM 付きの表記
+  const ampmMatch = cleanText.match(/(?:午前|午後|AM|PM)[\s　]*([0-1]?[0-9])[:時.]([0-5][0-9])/i);
   if (ampmMatch) {
     let hour = parseInt(ampmMatch[1], 10);
     const minute = parseInt(ampmMatch[2], 10);
@@ -57,15 +95,29 @@ export function extractTimeFromReceiptText(text: string): string | undefined {
     }
   }
 
-  // 2. 通常の時刻表記 (HH:mm または HH:mm:ss または HH時MM分)
-  const timeMatch = text.match(/(?:^|[\s\r\n]|[0-9]{2,4}[/-][0-9]{1,2}[/-][0-9]{1,2}[\s　]+)([0-2]?[0-9])[:時]([0-5][0-9])(?:[:分秒]|$|\s|[0-5][0-9])/);
-  if (timeMatch) {
-    const hour = parseInt(timeMatch[1], 10);
-    const minute = parseInt(timeMatch[2], 10);
+  // 4. 入庫時刻（出庫や精算時刻がない場合のフォールバック）
+  const inMatch = cleanText.match(/入庫[\s:：]*(?:[0-9]{2,4}[/-][0-9]{1,2}[/-][0-9]{1,2}[\s\-]*)?[\s:：]*([0-2]?[0-9])[:時.]([0-5][0-9])/i);
+  if (inMatch) {
+    const hour = parseInt(inMatch[1], 10);
+    const minute = parseInt(inMatch[2], 10);
     if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
       return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
     }
   }
+
+  // 5. 一般的な時刻表記 (HH:mm または HH:mm:ss または HH時MM分)
+  // 電話番号（03-xxxx, 0120-xxx）や郵便番号（123-4567）、税率（10%）、金額（1000円）の誤認を防ぐ
+  const timeMatches = cleanText.matchAll(
+    /(?:^|[\s\r\n])([0-2]?[0-9])[:時]([0-5][0-9])(?::[0-5][0-9]|分)?(?=[\s\r\n]|$|[^\d%円])/g
+  );
+  for (const tm of timeMatches) {
+    const hour = parseInt(tm[1], 10);
+    const minute = parseInt(tm[2], 10);
+    if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+      return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    }
+  }
+
   return undefined;
 }
 
