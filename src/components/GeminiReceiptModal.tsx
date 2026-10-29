@@ -142,7 +142,7 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
 
   // 入力値・解析結果が変わるたびに二重登録チェックを実行
   useEffect(() => {
-    if (!isOpen || !currentResult || isAnalyzing) {
+    if (!isOpen || !currentResult || isAnalyzing || !editTotalAmount || Number(editTotalAmount) <= 0) {
       setDuplicates([]);
       return;
     }

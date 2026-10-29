@@ -66,8 +66,9 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
   }, [isOpen, activeTour]);
 
   // 入力中のリアルタイム二重登録チェック
+  // （金額だけでなく、店舗名も入力されている場合のみ重複チェックを実行。金額入力直後の誤爆を防ぐ）
   useEffect(() => {
-    if (!isOpen || !amount || Number(amount) <= 0) {
+    if (!isOpen || !amount || Number(amount) <= 0 || !place.trim()) {
       setDuplicates([]);
       return;
     }

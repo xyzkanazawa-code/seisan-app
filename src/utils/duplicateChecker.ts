@@ -210,15 +210,15 @@ export function evaluateDuplicatePair(
   }
 
   const reasons: string[] = [];
-  const isEtcPair = candidate.category === 'etc' || existing.category === 'etc';
 
   // 1. 画像完全一致（同一データURL）チェック
+  // （全く同じ写真データが使われている場合は最優先で重複判定）
   if (
     candidate.imageUrl &&
     (candidate.imageUrl === existing.originalImageUrl ||
       candidate.imageUrl === existing.processedImageUrl)
   ) {
-    if (candidate.imageUrl.length > 15000) {
+    if (candidate.imageUrl.length > 1000) {
       reasons.push('同一のレシート画像データ');
       return { confidence: 'exact_image', reasons, isEtc: false };
     }
@@ -227,32 +227,50 @@ export function evaluateDuplicatePair(
   const candidateAmount = Number(candidate.amount) || 0;
   const existingAmount = Number(existing.amount) || 0;
 
-  // 金額が0以下の場合は金額ベース比較を行わない
-  if (candidateAmount <= 0 || existingAmount <= 0) {
+  // 金額が一致しない、または0以下の場合は絶対に重複ではない
+  if (candidateAmount <= 0 || existingAmount <= 0 || candidateAmount !== existingAmount) {
     return null;
   }
 
-  const isSameAmount = candidateAmount === existingAmount;
-  if (!isSameAmount) {
+  // カテゴリが双方ともに明確に設定されており、かつ異なっている場合は絶対に別経費（例: 駐車場 vs 昼食、燃料 vs ETCなど）
+  // 金額が偶然同じであっても、種別が違えば重複ではない
+  if (
+    candidate.category &&
+    existing.category &&
+    candidate.category !== 'other' &&
+    existing.category !== 'other' &&
+    candidate.category !== existing.category
+  ) {
     return null;
   }
 
+  const isEtcPair = candidate.category === 'etc' || existing.category === 'etc';
   const isSameDate = Boolean(candidate.date && existing.date && candidate.date === existing.date);
-  const placeMatched = isPlaceSimilar(candidate.place, existing.place);
-  const placeDistinct = isPlaceDistinct(candidate.place, existing.place);
 
   const normCandInv = candidate.invoiceNumber?.trim().toUpperCase();
   const normExistInv = existing.invoiceNumber?.trim().toUpperCase();
-  const invoiceMatched = Boolean(normCandInv && normExistInv && normCandInv === normExistInv);
+  const hasCandInv = Boolean(normCandInv && /^T\d{13}$/.test(normCandInv));
+  const hasExistInv = Boolean(normExistInv && /^T\d{13}$/.test(normExistInv));
+  const invoiceMatched = Boolean(hasCandInv && hasExistInv && normCandInv === normExistInv);
 
-  // 【超重要】両方にインボイス登録番号があり、番号が異なる場合は100%別事業者・別店舗！
-  if (normCandInv && normExistInv && normCandInv !== normExistInv) {
+  // 【超重要】両方に有効なインボイス番号があり、番号が異なる場合は100%別事業者・別店舗！
+  if (hasCandInv && hasExistInv && normCandInv !== normExistInv) {
     return null;
   }
 
-  // 重要：店舗名が両方に正しく存在し、かつ明確に異なっている場合（例: セブンイレブン vs ENEOS、タイムズ日光 vs タイムズ宇都宮など）
-  // インボイス番号が一致している異常事態でない限り、同じ金額であっても別レシートとして扱い重複判定しない！
+  const placeMatched = isPlaceSimilar(candidate.place, existing.place);
+  const placeDistinct = isPlaceDistinct(candidate.place, existing.place);
+
+  // 【超重要】店舗名が両方に正しく存在し、かつ明確に異なっている場合は絶対に別店舗！
+  // （例: セブンイレブン vs ENEOS、タイムズ日光 vs タイムズ宇都宮など）
   if (placeDistinct && !invoiceMatched) {
+    return null;
+  }
+
+  // 【超重要】「金額だけの一致」による誤爆を完全に排除！
+  // 店舗名が一致・類似（placeMatched）しているか、またはインボイス番号が一致（invoiceMatched）していなければ重複とみなさない！
+  // （店舗名が未入力や汎用名の場合に金額だけで重複警告が出るのを防ぐ）
+  if (!placeMatched && !invoiceMatched) {
     return null;
   }
 
@@ -265,49 +283,34 @@ export function evaluateDuplicatePair(
     }
   }
 
-  // ETCの場合：同じ高速区間（往復等）の利用が多いため、画像が同一でない場合は控えめ扱い（low）
+  // ETCの場合：同じ高速区間（往復等）の利用が多いため、控えめ扱い（low）
   if (isEtcPair) {
-    if (isSameDate && isSameAmount && placeMatched) {
+    if (isSameDate && placeMatched) {
       reasons.push(`同日の同一ETC区間・料金(¥${existingAmount.toLocaleString()}) ※往復等の正常な利用の可能性があります`);
       return { confidence: 'low', reasons, isEtc: true };
     }
     return null;
   }
 
-  // 画像知覚ハッシュ（aHash）の比較
-  const hashDist = getHashDistance(_candidateHash, _existingHash);
-  const isImageVisuallySame = hashDist <= 10;
-
   // 2. 高確度重複 (High)（ETC以外）:
-  // - 利用日一致 + 金額一致 + (店舗名類似 または インボイス番号一致 または 画像視覚類似)
-  if (isSameDate && isSameAmount && (placeMatched || invoiceMatched || isImageVisuallySame)) {
+  // - 利用日一致 + 金額一致 + (店舗名類似 または インボイス番号一致)
+  if (isSameDate && (placeMatched || invoiceMatched)) {
     reasons.push(`利用日(${existing.date})と金額(¥${existingAmount.toLocaleString()})が一致`);
+    if (placeMatched) reasons.push(`利用場所「${existing.place}」が一致`);
+    if (invoiceMatched) reasons.push(`インボイス番号(${normExistInv})が一致`);
     if (existing.time && timeDiff !== null && timeDiff < 10) {
       reasons.push(`利用時刻(${existing.time})も一致/近接`);
     }
-    if (isImageVisuallySame) reasons.push('レシート画像が極めて類似');
-    if (placeMatched) reasons.push(`利用場所「${existing.place}」が一致・類似`);
-    if (invoiceMatched) reasons.push(`インボイス番号(${normExistInv})が一致`);
     return { confidence: 'high', reasons, isEtc: false };
   }
 
-  // パターンC: 日付が1日違いまたは読み取りズレだが、金額 + 店舗名 + インボイス番号が完全一致
-  if (!isSameDate && isSameAmount && placeMatched && invoiceMatched) {
+  // 3. 中確度重複 (Medium):
+  // 日付が1日違いまたは読み取りズレだが、金額 + 店舗名 + インボイス番号が完全一致
+  if (!isSameDate && placeMatched && invoiceMatched) {
     reasons.push(
       `金額(¥${existingAmount.toLocaleString()})・店舗名「${existing.place}」・インボイス番号が完全一致（日付相違: ${existing.date}）`
     );
     return { confidence: 'medium', reasons, isEtc: false };
-  }
-
-  // 3. 中確度重複 (Medium)（店舗名が空欄・汎用名で特定できない場合）:
-  // 誤爆防止のため、画像が視覚的に同一、またはインボイス番号・時刻が一致している場合のみ重複と判定
-  const candidateHasValidPlace = !isGenericPlace(candidate.place);
-  const existingHasValidPlace = !isGenericPlace(existing.place);
-  if (!candidateHasValidPlace || !existingHasValidPlace) {
-    if (isSameDate && isSameAmount && (isImageVisuallySame || invoiceMatched)) {
-      reasons.push(`店舗名未特定ですが、日付・金額および${isImageVisuallySame ? '画像特徴' : 'インボイス番号'}が一致`);
-      return { confidence: 'medium', reasons, isEtc: false };
-    }
   }
 
   return null;
