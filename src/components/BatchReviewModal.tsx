@@ -27,6 +27,7 @@ import {
   type DuplicateMatch
 } from '../utils/duplicateChecker';
 import { ImageCropModal } from './ImageCropModal';
+import { ClockTimePickerModal } from './ClockTimePickerModal';
 
 interface BatchReviewModalProps {
   isOpen: boolean;
@@ -48,6 +49,7 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
   const [initialAdvanceRemaining, setInitialAdvanceRemaining] = useState<number>(0);
   const [cropTargetItem, setCropTargetItem] = useState<{ id: string; url: string } | null>(null);
   const [tighteningId, setTighteningId] = useState<string | null>(null);
+  const [clockPickerTarget, setClockPickerTarget] = useState<{ id: string; time?: string } | null>(null);
   const [itemDuplicates, setItemDuplicates] = useState<
     Record<string, { dbMatches: DuplicateMatch[]; batchMatchIndex?: number; batchReasons?: string[] }>
   >({});
@@ -1025,22 +1027,72 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
                         今
                       </button>
                     </div>
-                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      {/* 時計を出して時間・分を入力するボタン */}
+                      <button
+                        type="button"
+                        title="時計を出して時間と分を入力"
+                        onClick={() => setClockPickerTarget({ id: item.id, time: item.time })}
+                        style={{
+                          flex: 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '7px 10px',
+                          background: 'rgba(15, 23, 42, 0.7)',
+                          border: item.time
+                            ? '1.5px solid rgba(59, 130, 246, 0.6)'
+                            : '1px dashed rgba(255, 255, 255, 0.25)',
+                          borderRadius: '8px',
+                          color: item.time ? '#ffffff' : '#94a3b8',
+                          cursor: 'pointer',
+                          textAlign: 'left'
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            fontFamily: item.time ? 'var(--font-num)' : undefined,
+                            fontWeight: item.time ? 800 : 500,
+                            fontSize: item.time ? '1rem' : '0.8rem'
+                          }}
+                        >
+                          <Clock size={15} color={item.time ? '#60a5fa' : '#64748b'} />
+                          {item.time || '時計で入力'}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: '0.68rem',
+                            color: '#60a5fa',
+                            background: 'rgba(59, 130, 246, 0.18)',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            fontWeight: 700
+                          }}
+                        >
+                          時計
+                        </span>
+                      </button>
+
+                      {/* 直接の手入力/ブラウザネイティブ時刻ピッカー */}
                       <input
                         type="time"
                         className="form-input"
                         value={item.time || ''}
-                        placeholder="HH:mm"
                         onChange={(e) => updateItem(item.id, { time: e.target.value })}
-                        style={{ flex: 1 }}
+                        style={{ width: '42px', padding: '7px 4px', textAlign: 'center' }}
+                        title="直接入力 / タイムピッカー"
                       />
+
                       {item.time && (
                         <button
                           type="button"
                           title="時刻を消去"
                           onClick={() => updateItem(item.id, { time: undefined })}
                           style={{
-                            padding: '8px 10px',
+                            padding: '7px 9px',
                             background: 'rgba(255, 255, 255, 0.05)',
                             border: '1px solid rgba(255, 255, 255, 0.1)',
                             borderRadius: 8,
@@ -1314,6 +1366,24 @@ export const BatchReviewModal: React.FC<BatchReviewModalProps> = ({
           imageUrl={cropTargetItem.url}
           onApplyCrop={(croppedUrl) => {
             updateItem(cropTargetItem.id, { processedImageUrl: croppedUrl });
+          }}
+        />
+      )}
+
+      {/* 時計を出して時間・分を入力するモーダル */}
+      {clockPickerTarget && (
+        <ClockTimePickerModal
+          isOpen={!!clockPickerTarget}
+          initialTime={clockPickerTarget.time}
+          title="レシート利用時刻の入力（時計）"
+          onSelect={(newTime) => {
+            updateItem(clockPickerTarget.id, { time: newTime });
+            setClockPickerTarget(null);
+          }}
+          onClose={() => setClockPickerTarget(null)}
+          onClear={() => {
+            updateItem(clockPickerTarget.id, { time: undefined });
+            setClockPickerTarget(null);
           }}
         />
       )}

@@ -28,6 +28,7 @@ import { sliceImageVerticalSegments } from '../utils/imageProcessor';
 import { getAppConfig } from '../utils/configStorage';
 import { checkReceiptDuplicates, type DuplicateMatch } from '../utils/duplicateChecker';
 import { ImageCropModal } from './ImageCropModal';
+import { ClockTimePickerModal } from './ClockTimePickerModal';
 import { db, type Tour } from '../db';
 
 interface GeminiReceiptModalProps {
@@ -80,6 +81,7 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
   const [etcPaidByGuide, setEtcPaidByGuide] = useState<boolean>(false);
 
   const [showJsonView, setShowJsonView] = useState(false);
+  const [isClockPickerOpen, setIsClockPickerOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [duplicates, setDuplicates] = useState<DuplicateMatch[]>([]);
@@ -1352,7 +1354,54 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                         今
                       </button>
                     </div>
-                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        title="時計を出して時間と分を入力"
+                        onClick={() => setIsClockPickerOpen(true)}
+                        style={{
+                          flex: 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '7px 10px',
+                          background: 'rgba(15, 23, 42, 0.7)',
+                          border: editTime
+                            ? '1.5px solid rgba(59, 130, 246, 0.6)'
+                            : '1px dashed rgba(255, 255, 255, 0.25)',
+                          borderRadius: '10px',
+                          color: editTime ? '#ffffff' : '#94a3b8',
+                          cursor: 'pointer',
+                          textAlign: 'left'
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            fontFamily: editTime ? 'var(--font-num)' : undefined,
+                            fontWeight: editTime ? 800 : 500,
+                            fontSize: editTime ? '0.95rem' : '0.8rem'
+                          }}
+                        >
+                          <Clock size={14} color={editTime ? '#60a5fa' : '#64748b'} />
+                          {editTime || '時計で入力'}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: '0.68rem',
+                            color: '#60a5fa',
+                            background: 'rgba(59, 130, 246, 0.18)',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            fontWeight: 700
+                          }}
+                        >
+                          時計
+                        </span>
+                      </button>
+
                       <input
                         type="time"
                         value={editTime}
@@ -1361,17 +1410,20 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                           updateCurrentEntryResult({ time: e.target.value });
                         }}
                         style={{
-                          flex: 1,
-                          padding: '8px 10px',
+                          width: '42px',
+                          padding: '7px 4px',
                           background: 'rgba(15, 23, 42, 0.7)',
                           border: '1px solid rgba(255, 255, 255, 0.12)',
                           borderRadius: '10px',
                           color: '#ffffff',
                           fontSize: '0.85rem',
                           outline: 'none',
+                          textAlign: 'center',
                           boxSizing: 'border-box'
                         }}
+                        title="直接入力 / タイムピッカー"
                       />
+
                       {editTime && (
                         <button
                           type="button"
@@ -1381,7 +1433,7 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
                             updateCurrentEntryResult({ time: undefined });
                           }}
                           style={{
-                            padding: '8px 10px',
+                            padding: '7px 9px',
                             background: 'rgba(255, 255, 255, 0.05)',
                             border: '1px solid rgba(255, 255, 255, 0.12)',
                             borderRadius: '10px',
@@ -1747,6 +1799,26 @@ export const GeminiReceiptModal: React.FC<GeminiReceiptModalProps> = ({
             } else {
               setSelectedImage(croppedUrl);
             }
+          }}
+        />
+      )}
+
+      {/* 時計を出して時間・分を入力するモーダル */}
+      {isClockPickerOpen && (
+        <ClockTimePickerModal
+          isOpen={isClockPickerOpen}
+          initialTime={editTime}
+          title="利用時刻を時計で入力"
+          onSelect={(selectedTime) => {
+            setEditTime(selectedTime);
+            updateCurrentEntryResult({ time: selectedTime });
+            setIsClockPickerOpen(false);
+          }}
+          onClose={() => setIsClockPickerOpen(false)}
+          onClear={() => {
+            setEditTime('');
+            updateCurrentEntryResult({ time: undefined });
+            setIsClockPickerOpen(false);
           }}
         />
       )}

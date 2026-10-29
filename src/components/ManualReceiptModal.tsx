@@ -4,6 +4,7 @@ import { db, type Tour, type ExpenseCategory, type PaymentMethod, type Receipt }
 import { extractInvoiceNumbers } from '../utils/invoiceValidator';
 import { learnFromReceipt } from '../utils/learningService';
 import { checkReceiptDuplicates, type DuplicateMatch } from '../utils/duplicateChecker';
+import { ClockTimePickerModal } from './ClockTimePickerModal';
 
 interface ManualReceiptModalProps {
   isOpen: boolean;
@@ -31,6 +32,7 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
   const [memo, setMemo] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [duplicates, setDuplicates] = useState<DuplicateMatch[]>([]);
+  const [isClockPickerOpen, setIsClockPickerOpen] = useState(false);
 
   // モーダル表示時にフォームを初期化＆前払金の残高を計算
   useEffect(() => {
@@ -339,22 +341,70 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
                       今
                     </button>
                   </div>
-                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      title="時計を出して時間と分を入力"
+                      onClick={() => setIsClockPickerOpen(true)}
+                      style={{
+                        flex: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '7px 10px',
+                        background: 'rgba(15, 23, 42, 0.7)',
+                        border: time
+                          ? '1.5px solid rgba(59, 130, 246, 0.6)'
+                          : '1px dashed rgba(255, 255, 255, 0.25)',
+                        borderRadius: '8px',
+                        color: time ? '#ffffff' : '#94a3b8',
+                        cursor: 'pointer',
+                        textAlign: 'left'
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          fontFamily: time ? 'var(--font-num)' : undefined,
+                          fontWeight: time ? 800 : 500,
+                          fontSize: time ? '1rem' : '0.8rem'
+                        }}
+                      >
+                        <Clock size={15} color={time ? '#60a5fa' : '#64748b'} />
+                        {time || '時計で入力'}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: '0.68rem',
+                          color: '#60a5fa',
+                          background: 'rgba(59, 130, 246, 0.18)',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          fontWeight: 700
+                        }}
+                      >
+                        時計
+                      </span>
+                    </button>
+
                     <input
                       type="time"
                       className="form-input"
                       value={time}
                       onChange={(e) => setTime(e.target.value)}
-                      placeholder="例: 12:34"
-                      style={{ flex: 1 }}
+                      style={{ width: '42px', padding: '7px 4px', textAlign: 'center' }}
+                      title="直接入力 / タイムピッカー"
                     />
+
                     {time && (
                       <button
                         type="button"
                         title="時刻を消去"
                         onClick={() => setTime('')}
                         style={{
-                          padding: '8px 10px',
+                          padding: '7px 9px',
                           background: 'rgba(255, 255, 255, 0.05)',
                           border: '1px solid rgba(255, 255, 255, 0.1)',
                           borderRadius: 8,
@@ -707,6 +757,24 @@ export const ManualReceiptModal: React.FC<ManualReceiptModalProps> = ({
           </div>
         </form>
       </div>
+
+      {/* 時計を出して時間・分を入力するモーダル */}
+      {isClockPickerOpen && (
+        <ClockTimePickerModal
+          isOpen={isClockPickerOpen}
+          initialTime={time}
+          title="利用時刻を時計で入力"
+          onSelect={(selectedTime) => {
+            setTime(selectedTime);
+            setIsClockPickerOpen(false);
+          }}
+          onClose={() => setIsClockPickerOpen(false)}
+          onClear={() => {
+            setTime('');
+            setIsClockPickerOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 };

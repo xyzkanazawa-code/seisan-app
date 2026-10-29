@@ -12,7 +12,8 @@ import {
   Smartphone,
   CreditCard,
   Maximize2,
-  AlertCircle
+  AlertCircle,
+  Clock
 } from 'lucide-react';
 import { analyzeReceiptImage, type ParsedReceiptItem } from '../utils/ocrService';
 import {
@@ -26,6 +27,7 @@ import { extractInvoiceNumbers } from '../utils/invoiceValidator';
 import { getLearningStats } from '../utils/learningService';
 import { sortReceiptsByDate } from '../utils/receiptSort';
 import type { Tour } from '../db';
+import { ClockTimePickerModal } from './ClockTimePickerModal';
 
 interface ScannerModalProps {
   isOpen: boolean;
@@ -48,6 +50,9 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
 }) => {
   const [isBatchMode, setIsBatchMode] = useState(false); // 連続撮影モード
   const [capturedImages, setCapturedImages] = useState<string[]>([]);
+  const [presetTime, setPresetTime] = useState<string | undefined>(undefined); // 撮影時刻（時計入力）
+  const [imageTimes, setImageTimes] = useState<Record<number, string>>({}); // 撮影画像ごとの指定時刻
+  const [isClockPickerOpen, setIsClockPickerOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStatus, setProcessingStatus] = useState('');
   const [torchOn, setTorchOn] = useState(false);
@@ -72,6 +77,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     if (!isOpen) {
       stopCamera();
       setCapturedImages([]);
+      setImageTimes({});
+      setPresetTime(undefined);
       setIsProcessing(false);
       return;
     }
@@ -195,10 +202,15 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
 
     if (isBatchMode) {
       // 連続撮影モード: リストにストックして撮影継続
+      const nextIdx = capturedImages.length;
+      if (presetTime) {
+        setImageTimes((prev) => ({ ...prev, [nextIdx]: presetTime }));
+      }
       setCapturedImages((prev) => [...prev, dataUrl]);
     } else {
       // 単一撮影モード: 直ちにOCR解析へ
-      processImages([dataUrl]);
+      const singleTimes: Record<number, string> = presetTime ? { 0: presetTime } : {};
+      processImages([dataUrl], singleTimes);
     }
   };
 
@@ -219,7 +231,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
           if (isBatchMode) {
             setCapturedImages((prev) => [...prev, ...urls]);
           } else {
-            processImages(urls);
+            const singleTimes: Record<number, string> = presetTime ? { 0: presetTime } : {};
+            processImages(urls, singleTimes);
           }
         }
       };
@@ -228,7 +241,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   };
 
   // 画像の自動切り抜き・総合OCR・分割・インボイスハイライト解析
-  const processImages = async (imagesToProcess: string[]) => {
+  const processImages = async (imagesToProcess: string[], timesMap: Record<number, string> = imageTimes) => {
     if (imagesToProcess.length === 0) return;
 
     setIsProcessing(true);
@@ -295,12 +308,15 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
             const primaryInvoice = validatedInvoice.length > 0 ? validatedInvoice[0] : undefined;
             const highlightedImg = primaryInvoice ? await applyInvoiceHighlight(pieceImage) : pieceImage;
 
+            const designatedTime = timesMap[i] || presetTime;
+            const finalTime = designatedTime || geminiResult.time;
+
             allParsedItems.push({
               id: `gemini-${Date.now()}-${i}-${k}`,
               category: detectedCategory,
               paymentMethod: detectedPayment,
               date: geminiResult.date,
-              time: geminiResult.time,
+              time: finalTime,
               amount: geminiResult.totalAmount,
               place: geminiResult.shopName,
               invoiceNumber: primaryInvoice?.normalizedNumber || invoiceNum,
@@ -331,7 +347,11 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
           const items = await analyzeReceiptImage(img, (status) => {
             setProcessingStatus(`[${i + 1}/${croppedImages.length}] ${status}`);
           });
-          allParsedItems.push(...items);
+          const designatedTime = timesMap[i] || presetTime;
+          const itemsWithTime = designatedTime
+            ? items.map((it) => ({ ...it, time: it.time || designatedTime }))
+            : items;
+          allParsedItems.push(...itemsWithTime);
         } catch (err) {
           console.error('ローカルOCR解析エラー:', err);
         }
@@ -813,8 +833,33 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                 }}
               >
                 <img src={src} alt="thumb" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                {imageTimes[i] && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      bottom: 0,
+                      left: 0,
+                      right: 0,
+                      background: 'rgba(0,0,0,0.85)',
+                      color: '#60a5fa',
+                      fontSize: 8,
+                      fontWeight: 700,
+                      textAlign: 'center',
+                      fontFamily: 'var(--font-num)'
+                    }}
+                  >
+                    {imageTimes[i]}
+                  </div>
+                )}
                 <button
-                  onClick={() => setCapturedImages((prev) => prev.filter((_, idx) => idx !== i))}
+                  onClick={() => {
+                    setCapturedImages((prev) => prev.filter((_, idx) => idx !== i));
+                    setImageTimes((prev) => {
+                      const next = { ...prev };
+                      delete next[i];
+                      return next;
+                    });
+                  }}
                   style={{
                     position: 'absolute',
                     top: 0,
@@ -834,6 +879,66 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                 </button>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* 撮影時刻指定バー（あとからまとめて撮影するときに時計を出して時間・分を設定） */}
+        {!isProcessing && (
+          <div
+            style={{
+              padding: '6px 16px',
+              background: '#090d16',
+              borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setIsClockPickerOpen(true)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 14px',
+                borderRadius: 'var(--radius-full)',
+                background: presetTime ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.06)',
+                border: presetTime ? '1.5px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.15)',
+                color: presetTime ? '#60a5fa' : '#cbd5e1',
+                fontSize: '0.82rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                boxShadow: presetTime ? '0 0 12px rgba(59, 130, 246, 0.3)' : 'none'
+              }}
+            >
+              <Clock size={15} color={presetTime ? '#60a5fa' : '#94a3b8'} />
+              {presetTime ? `撮影時刻: ${presetTime} (時計で変更)` : '🕒 撮影時刻を時計で入力'}
+            </button>
+
+            {presetTime && (
+              <button
+                type="button"
+                title="自動読み取りに戻す"
+                onClick={() => setPresetTime(undefined)}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.1)',
+                  border: 'none',
+                  borderRadius: '50%',
+                  width: 22,
+                  height: 22,
+                  color: '#94a3b8',
+                  fontSize: '0.75rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+              >
+                ✕
+              </button>
+            )}
           </div>
         )}
 
@@ -942,6 +1047,24 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
           </div>
         )}
       </div>
+
+      {/* 撮影時刻指定用の時計モーダル */}
+      {isClockPickerOpen && (
+        <ClockTimePickerModal
+          isOpen={isClockPickerOpen}
+          initialTime={presetTime}
+          title="撮影レシートの利用時刻を設定"
+          onSelect={(time) => {
+            setPresetTime(time);
+            setIsClockPickerOpen(false);
+          }}
+          onClose={() => setIsClockPickerOpen(false)}
+          onClear={() => {
+            setPresetTime(undefined);
+            setIsClockPickerOpen(false);
+          }}
+        />
+      )}
 
       <style>{`
         @keyframes spin {
