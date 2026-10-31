@@ -698,18 +698,16 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
                 key={day.date}
                 style={{
                   display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
+                  flexDirection: 'column',
+                  gap: 6,
                   padding: '8px 12px',
                   borderRadius: 8,
                   background: 'rgba(255, 255, 255, 0.03)',
                   border: '1px solid rgba(255, 255, 255, 0.06)',
-                  fontSize: '0.78rem',
-                  flexWrap: 'wrap',
-                  gap: 8
+                  fontSize: '0.78rem'
                 }}
               >
-                <div style={{ fontWeight: 800, color: '#f8fafc', minWidth: 90 }}>
+                <div style={{ fontWeight: 800, color: '#f8fafc' }}>
                   {day.date}
                 </div>
 
@@ -728,7 +726,10 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
                   <span style={{ color: 'var(--text-muted)' }}>
                     他経費: ¥{day.otherTotal.toLocaleString()}
                   </span>
-                  <span style={{ fontWeight: 800, color: '#ffffff', fontFamily: 'var(--font-num)', marginLeft: 'auto' }}>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 2 }}>
+                  <span style={{ fontWeight: 800, color: '#ffffff', fontFamily: 'var(--font-num)' }}>
                     日計: ¥{day.dayTotal.toLocaleString()}
                   </span>
                 </div>
