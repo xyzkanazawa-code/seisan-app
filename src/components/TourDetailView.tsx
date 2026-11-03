@@ -26,6 +26,7 @@ import { ManualReceiptModal } from './ManualReceiptModal';
 import { EditTourModal } from './EditTourModal';
 import { EditReceiptModal } from './EditReceiptModal';
 import { ImageCropModal } from './ImageCropModal';
+import { ProfileModal } from './ProfileModal';
 
 interface TourDetailViewProps {
   tour: Tour;
@@ -56,6 +57,12 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
   const [cropTargetReceipt, setCropTargetReceipt] = useState<Receipt | null>(null);
   const [pdfResult, setPdfResult] = useState<PdfGenerationResult | null>(null);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [currentProfile, setCurrentProfile] = useState<DriverProfile>(profile);
+
+  useEffect(() => {
+    setCurrentProfile(profile);
+  }, [profile]);
 
   // ツアーに紐づくレシート一覧を取得（常に日付順でソート）
   const loadReceipts = async () => {
@@ -1544,7 +1551,36 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
         onClose={() => setIsPdfModalOpen(false)}
         pdfResult={pdfResult}
         tour={tour}
-        profile={profile}
+        profile={currentProfile}
+        onEditTour={() => {
+          setIsPdfModalOpen(false);
+          setIsEditTourModalOpen(true);
+        }}
+        onEditProfile={() => {
+          setIsPdfModalOpen(false);
+          setIsProfileModalOpen(true);
+        }}
+      />
+
+      {/* 乗務員・会社プロファイル設定モーダル（会社名・住所・TEL） */}
+      <ProfileModal
+        isOpen={isProfileModalOpen}
+        onClose={() => setIsProfileModalOpen(false)}
+        currentProfile={currentProfile}
+        onProfileUpdated={async (updatedProf) => {
+          setCurrentProfile(updatedProf);
+          // プロファイル更新後にPDFプレビューを自動再生成してモーダルを再表示
+          try {
+            setIsGeneratingPdf(true);
+            const res = await generateTourExpensePdf(tour, receipts, updatedProf);
+            setPdfResult(res);
+            setIsPdfModalOpen(true);
+          } catch (e) {
+            console.error('PDF再生成エラー:', e);
+          } finally {
+            setIsGeneratingPdf(false);
+          }
+        }}
       />
 
       {/* 仮払金・ツアー情報編集モーダル */}
@@ -1552,7 +1588,20 @@ export const TourDetailView: React.FC<TourDetailViewProps> = ({
         isOpen={isEditTourModalOpen}
         onClose={() => setIsEditTourModalOpen(false)}
         tour={tour}
-        onTourUpdated={onTourUpdated}
+        onTourUpdated={async (updatedTour) => {
+          onTourUpdated(updatedTour);
+          // ツアー更新後にPDFプレビューを自動再生成してモーダルを再表示
+          try {
+            setIsGeneratingPdf(true);
+            const res = await generateTourExpensePdf(updatedTour, receipts, currentProfile);
+            setPdfResult(res);
+            setIsPdfModalOpen(true);
+          } catch (e) {
+            console.error('PDF再生成エラー:', e);
+          } finally {
+            setIsGeneratingPdf(false);
+          }
+        }}
       />
 
       {/* レシート余白切り取り・トリミング調整モーダル */}

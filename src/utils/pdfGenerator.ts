@@ -539,16 +539,23 @@ export async function renderDailySummarySamplePage(
   const rightBoxW = tableW - titleBoxW - midBoxW;
   ctx.strokeRect(rightBoxX, infoY, rightBoxW, infoH);
 
-  const compName = profile.companyName || '株式会社 全日本交通';
-  const compAddr = profile.address || '〒590-0521 泉南市樽井 3-39-19';
-  const compTel = profile.phoneNumber ? `TEL : ${profile.phoneNumber}` : 'TEL : 072-468-6208';
+  // 会社名・住所・電話番号（ユーザーが設定した内容をそのまま反映）
+  const compName = profile.companyName || '';
+  const compAddr = profile.address || '';
+  const compTel = profile.phoneNumber ? `TEL : ${profile.phoneNumber}` : '';
 
   ctx.textAlign = 'center';
   ctx.font = 'bold 18px "Noto Sans JP", sans-serif';
-  ctx.fillText(compName, rightBoxX + rightBoxW / 2, infoY + 30);
+  if (compName) {
+    ctx.fillText(compName, rightBoxX + rightBoxW / 2, infoY + 30);
+  }
   ctx.font = '14px "Noto Sans JP", sans-serif';
-  ctx.fillText(compAddr, rightBoxX + rightBoxW / 2, infoY + 60);
-  ctx.fillText(compTel, rightBoxX + rightBoxW / 2, infoY + 86);
+  if (compAddr) {
+    ctx.fillText(compAddr, rightBoxX + rightBoxW / 2, infoY + 60);
+  }
+  if (compTel) {
+    ctx.fillText(compTel, rightBoxX + rightBoxW / 2, infoY + 86);
+  }
   ctx.textAlign = 'left';
 
   // 3. メインマトリクス表の設計
@@ -659,7 +666,7 @@ export async function renderDailySummarySamplePage(
       name: '仮払金 / 前渡し金 (円)',
       isIncome: true,
       customAmounts: (_k, idx) => (idx === 0 ? tour.advancePayment : ''),
-      customSubtotal: () => tour.advancePayment
+      customSubtotal: () => (tour.advancePayment || 0) + (tour.guideDepositAmount || 0) + (tour.carryoverAmount || 0)
     },
     {
       id: 'guide_highway',
@@ -675,17 +682,17 @@ export async function renderDailySummarySamplePage(
     }
   ];
 
-  // 高速料金セクション（実車・回送ボタン完全連動 ※現金有料道路(toll)は下の支出セクションで集計するため二重計上を防止）
+  // 高速料金セクション（実車・回送ボタン完全連動 ※会社仮払金で支払ったETCのみ下に計上）
   const highwayRows: RowDef[] = [
     {
       id: 'highway_actual',
       name: '実車（載有乗客的车）',
-      filter: (r) => r.category === 'etc' && r.etcType !== 'kaiso' && !r.memo?.includes('回送')
+      filter: (r) => r.category === 'etc' && !r.etcPaidByGuide && r.etcType !== 'kaiso' && !r.memo?.includes('回送')
     },
     {
       id: 'highway_empty',
       name: '回送（空車掉頭）',
-      filter: (r) => r.category === 'etc' && (r.etcType === 'kaiso' || !!r.memo?.includes('回送'))
+      filter: (r) => r.category === 'etc' && !r.etcPaidByGuide && (r.etcType === 'kaiso' || !!r.memo?.includes('回送'))
     }
   ];
 
@@ -770,41 +777,110 @@ export async function renderDailySummarySamplePage(
     ctx.font = '14px "Noto Sans JP", sans-serif';
     ctx.fillText(row.name, leftX + colCatW + 10, rowY + 28);
 
-    // 日付列
-    let x = leftX + headerLeftW;
-    dateColumns.forEach((col, cIdx) => {
-      ctx.strokeRect(x, rowY, colDayW, standardRowH);
-      const val = row.customAmounts
-        ? row.customAmounts(col.key, cIdx)
-        : row.filter
-        ? getAmount(row.filter, col.key)
-        : '';
-      if (typeof val === 'number' && val > 0) {
+    if (rIdx === 0) {
+      // 1行目: 赤丸・青丸結合セル（7日間中: 1-2日目結合、3-4日目結合、5日目単独、6-7日目結合）
+      const startX = leftX + headerLeftW;
+
+      // 1. 1〜2日目結合（赤丸部分: 幅 colDayW * 2 = 270px）: 会社仮払金
+      ctx.strokeRect(startX, rowY, colDayW * 2, standardRowH);
+      const advAmt = tour.advancePayment || 0;
+      if (advAmt > 0) {
+        ctx.font = '11px "Noto Sans JP", sans-serif';
+        ctx.fillStyle = '#475569';
+        ctx.fillText('会社仮払金', startX + 10, rowY + 18);
+        ctx.fillStyle = '#000000';
+        ctx.font = 'bold 15px "Plus Jakarta Sans", sans-serif';
         ctx.textAlign = 'right';
-        ctx.font = 'bold 14px "Plus Jakarta Sans", sans-serif';
-        ctx.fillText(`¥${val.toLocaleString()}`, x + colDayW - 10, rowY + 28);
+        ctx.fillText(`¥${advAmt.toLocaleString()}`, startX + colDayW * 2 - 10, rowY + 34);
         ctx.textAlign = 'left';
       }
-      x += colDayW;
-    });
 
-    // 小計列
-    ctx.strokeRect(x, rowY, colSubW, standardRowH);
-    const subVal = row.customSubtotal
-      ? row.customSubtotal()
-      : row.filter
-      ? getSubtotal(row.filter)
-      : 0;
-    if (typeof subVal === 'number' && subVal > 0) {
-      ctx.textAlign = 'right';
-      ctx.font = 'bold 14px "Plus Jakarta Sans", sans-serif';
-      ctx.fillText(`¥${subVal.toLocaleString()}`, x + colSubW - 10, rowY + 28);
-      ctx.textAlign = 'left';
+      // 2. 3〜4日目結合（青丸・30日のところ: 幅 colDayW * 2 = 270px）: ガイドからの預り金
+      const day3Key = dateColumns[2]?.key;
+      const day3GuideReceiptAmt = day3Key ? getAmount((r) => r.category === 'etc' && !!r.etcPaidByGuide, day3Key) : 0;
+      const guideAmt = typeof tour.guideDepositAmount === 'number' && tour.guideDepositAmount > 0
+        ? tour.guideDepositAmount
+        : (day3GuideReceiptAmt > 0 ? day3GuideReceiptAmt : 0);
+
+      ctx.strokeRect(startX + colDayW * 2, rowY, colDayW * 2, standardRowH);
+      if (guideAmt > 0 || typeof tour.guideDepositAmount === 'number') {
+        ctx.font = '11px "Noto Sans JP", sans-serif';
+        ctx.fillStyle = '#475569';
+        ctx.fillText('ガイド預り金', startX + colDayW * 2 + 10, rowY + 18);
+        ctx.fillStyle = '#000000';
+        ctx.font = 'bold 15px "Plus Jakarta Sans", sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(guideAmt > 0 ? `¥${guideAmt.toLocaleString()}` : '¥0', startX + colDayW * 4 - 10, rowY + 34);
+        ctx.textAlign = 'left';
+      }
+
+      // 3. 5日目（単独セル: 幅 colDayW = 135px）
+      ctx.strokeRect(startX + colDayW * 4, rowY, colDayW, standardRowH);
+
+      // 4. 6〜7日目結合（青丸・2日のところ: 幅 colDayW * 2 = 270px）: 前回の繰越金（ツアー名）
+      ctx.strokeRect(startX + colDayW * 5, rowY, colDayW * 2, standardRowH);
+      const carryoverAmt = tour.carryoverAmount || 0;
+      const carryoverName = tour.carryoverTourName || '';
+      if (carryoverAmt > 0 || carryoverName) {
+        ctx.font = '11px "Noto Sans JP", sans-serif';
+        ctx.fillStyle = '#475569';
+        const label = carryoverName ? `前回繰越 (${carryoverName})` : '前回繰越金';
+        ctx.fillText(label, startX + colDayW * 5 + 10, rowY + 18);
+        ctx.fillStyle = '#000000';
+        ctx.font = 'bold 15px "Plus Jakarta Sans", sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(carryoverAmt > 0 ? `¥${carryoverAmt.toLocaleString()}` : '', startX + colDayW * 7 - 10, rowY + 34);
+        ctx.textAlign = 'left';
+      }
+
+      // 5. 小計列
+      const subX = startX + colDayW * 7;
+      ctx.strokeRect(subX, rowY, colSubW, standardRowH);
+      const totalFirstRow = advAmt + guideAmt + carryoverAmt;
+      if (totalFirstRow > 0) {
+        ctx.textAlign = 'right';
+        ctx.font = 'bold 14px "Plus Jakarta Sans", sans-serif';
+        ctx.fillText(`¥${totalFirstRow.toLocaleString()}`, subX + colSubW - 10, rowY + 28);
+        ctx.textAlign = 'left';
+      }
+    } else {
+      // 2行目・3行目は通常の日別列
+      let x = leftX + headerLeftW;
+      dateColumns.forEach((col) => {
+        ctx.strokeRect(x, rowY, colDayW, standardRowH);
+        const val = row.filter ? getAmount(row.filter, col.key) : 0;
+        if (typeof val === 'number' && val > 0) {
+          ctx.textAlign = 'right';
+          ctx.font = 'bold 14px "Plus Jakarta Sans", sans-serif';
+          ctx.fillText(`¥${val.toLocaleString()}`, x + colDayW - 10, rowY + 28);
+          ctx.textAlign = 'left';
+        }
+        x += colDayW;
+      });
+
+      // 小計列
+      ctx.strokeRect(x, rowY, colSubW, standardRowH);
+      const subVal = row.filter ? getSubtotal(row.filter) : 0;
+      if (typeof subVal === 'number' && subVal > 0) {
+        ctx.textAlign = 'right';
+        ctx.font = 'bold 14px "Plus Jakarta Sans", sans-serif';
+        ctx.fillText(`¥${subVal.toLocaleString()}`, x + colSubW - 10, rowY + 28);
+        ctx.textAlign = 'left';
+      }
     }
   });
 
   // 右端枠: 入金合計（収歓総額）
-  const totalIncome = tour.advancePayment; // + ガイド預り金があれば加算
+  // 会社仮払金 + ガイド預り金(手入力/行) + 前回繰越金 + ガイド預り金(高速レシート) + ガイド預り金(残業レシート)
+  const guideTotalReceipts = getSubtotal((r) => r.category === 'etc' && !!r.etcPaidByGuide);
+  const overtimeTotalReceipts = getSubtotal((r) => r.category === 'overtime');
+
+  const totalIncome = (tour.advancePayment || 0)
+    + (tour.carryoverAmount || 0)
+    + (typeof tour.guideDepositAmount === 'number' ? tour.guideDepositAmount : 0)
+    + guideTotalReceipts
+    + overtimeTotalReceipts;
+
   const incomeTotalX = leftX + headerLeftW + colDayW * numDays + colSubW;
   ctx.strokeRect(incomeTotalX, tableY, colTotalW, incomeSecH);
   ctx.fillStyle = '#000000';

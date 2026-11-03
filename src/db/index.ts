@@ -36,6 +36,9 @@ export interface Tour {
   clientContactName?: string; // 相手方の担当者名（添乗員・手配担当者）
   waterLoadedCount?: number;  // 水積込本数（本）
   waterRemainingCount?: number; // 水残本数（本）
+  carryoverAmount?: number;     // 前回の繰越金（円）
+  carryoverTourName?: string;   // 前回の繰越金 ツアー名
+  guideDepositAmount?: number;  // ガイドからの預り金（円）
   memo?: string;              // 備考
   createdAt: number;
   updatedAt: number;

@@ -23,6 +23,9 @@ export const NewTourModal: React.FC<NewTourModalProps> = ({
   const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
   const [advancePayment, setAdvancePayment] = useState<number>(30000);
+  const [carryoverAmount, setCarryoverAmount] = useState<number | ''>('');
+  const [carryoverTourName, setCarryoverTourName] = useState('');
+  const [guideDepositAmount, setGuideDepositAmount] = useState<number | ''>('');
   const [waterLoadedCount, setWaterLoadedCount] = useState<number | ''>('');
   const [memo, setMemo] = useState('');
   const [isScanning, setIsScanning] = useState(false);
@@ -120,6 +123,9 @@ export const NewTourModal: React.FC<NewTourModalProps> = ({
       endDate,
       status: 'active',
       advancePayment: Number(advancePayment) || 0,
+      carryoverAmount: typeof carryoverAmount === 'number' ? carryoverAmount : undefined,
+      carryoverTourName: carryoverTourName.trim(),
+      guideDepositAmount: typeof guideDepositAmount === 'number' ? guideDepositAmount : undefined,
       driverName: profile?.driverName,
       vehicleNumber: profile?.vehicleNumber,
       clientCompanyName: clientCompanyName.trim(),
@@ -418,6 +424,80 @@ export const NewTourModal: React.FC<NewTourModalProps> = ({
                   value={advancePayment}
                   onChange={(e) => setAdvancePayment(Number(e.target.value))}
                 />
+              </div>
+            </div>
+
+            {/* 清算書 預り金追加入力欄（30日ガイド預り金 & 2日前回繰越金ツアー名） */}
+            <div
+              style={{
+                backgroundColor: 'rgba(59, 130, 246, 0.08)',
+                border: '1px solid rgba(59, 130, 246, 0.25)',
+                borderRadius: 'var(--radius-md)',
+                padding: '12px 14px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <label style={{ fontSize: '0.84rem', fontWeight: 800, color: '#93c5fd' }}>
+                  💰 清算書 預り金・繰越金（帳票反映）
+                </label>
+                <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>
+                  30日・2日の結合枠に印字
+                </span>
+              </div>
+
+              {/* 30日のところ: ガイドからの預り金 */}
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label" style={{ fontSize: '0.78rem', color: '#cbd5e1' }}>
+                  ガイドからの預り金（30日の結合枠に印字）
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <span style={{ position: 'absolute', left: 12, top: 9, fontSize: '0.95rem', fontWeight: 700, color: '#93c5fd' }}>¥</span>
+                  <input
+                    type="number"
+                    className="form-input"
+                    style={{ ...inputStyle, paddingLeft: 28, fontSize: '0.95rem', fontWeight: 700, color: '#93c5fd' }}
+                    value={guideDepositAmount}
+                    onChange={(e) => setGuideDepositAmount(e.target.value === '' ? '' : Number(e.target.value))}
+                    placeholder="未入力時はレシート集計値または空欄"
+                    min="0"
+                  />
+                </div>
+              </div>
+
+              {/* 2日のところ: 前回の繰越金 & ツアー名 */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 8 }}>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label" style={{ fontSize: '0.78rem', color: '#cbd5e1' }}>
+                    前回の繰越金ツアー名（2日の枠）
+                  </label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    style={{ ...inputStyle, fontSize: '0.85rem' }}
+                    value={carryoverTourName}
+                    onChange={(e) => setCarryoverTourName(e.target.value)}
+                    placeholder="例: 前回ツアーコード等"
+                  />
+                </div>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label" style={{ fontSize: '0.78rem', color: '#cbd5e1' }}>
+                    前回繰越金額
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <span style={{ position: 'absolute', left: 10, top: 9, fontSize: '0.9rem', fontWeight: 700, color: '#93c5fd' }}>¥</span>
+                    <input
+                      type="number"
+                      className="form-input"
+                      style={{ ...inputStyle, paddingLeft: 24, fontSize: '0.9rem', fontWeight: 700, color: '#93c5fd' }}
+                      value={carryoverAmount}
+                      onChange={(e) => setCarryoverAmount(e.target.value === '' ? '' : Number(e.target.value))}
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
               </div>
             </div>
 

@@ -21,6 +21,8 @@ interface PdfPreviewModalProps {
   pdfResult: PdfGenerationResult | null;
   tour: Tour;
   profile: DriverProfile;
+  onEditTour?: () => void;
+  onEditProfile?: () => void;
 }
 
 export const PdfPreviewModal: React.FC<PdfPreviewModalProps> = ({
@@ -28,7 +30,9 @@ export const PdfPreviewModal: React.FC<PdfPreviewModalProps> = ({
   onClose,
   pdfResult,
   tour,
-  profile
+  profile,
+  onEditTour,
+  onEditProfile
 }) => {
   const [isSharing, setIsSharing] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
@@ -260,6 +264,30 @@ export const PdfPreviewModal: React.FC<PdfPreviewModalProps> = ({
                 >
                   ✨ <strong>【新案 日別項目別集計表 サンプル】</strong><br />
                   送付いただいた「全日本交通 清算書」のフォーマットに基づき、1日ごとの項目別集計（預り金・高速実車/回送・給油・有料道・駐車・食事・宿泊等）をA4横向きで構成したサンプルです。
+                </div>
+
+                {/* クイック編集ボタン群（会社情報・預り金繰越金） */}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+                  {onEditProfile && (
+                    <button
+                      type="button"
+                      onClick={onEditProfile}
+                      className="btn-secondary"
+                      style={{ fontSize: '0.78rem', padding: '6px 12px', borderRadius: 'var(--radius-sm)', background: 'rgba(59, 130, 246, 0.2)', color: '#93c5fd', borderColor: '#3b82f6' }}
+                    >
+                      🏢 会社名・住所・TELを変更
+                    </button>
+                  )}
+                  {onEditTour && (
+                    <button
+                      type="button"
+                      onClick={onEditTour}
+                      className="btn-secondary"
+                      style={{ fontSize: '0.78rem', padding: '6px 12px', borderRadius: 'var(--radius-sm)', background: 'rgba(59, 130, 246, 0.2)', color: '#93c5fd', borderColor: '#3b82f6' }}
+                    >
+                      💰 預り金・繰越金・ツアー名を変更
+                    </button>
+                  )}
                 </div>
 
                 <div style={{ width: '100%', overflowX: 'auto', textAlign: 'center' }}>
